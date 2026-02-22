@@ -1,0 +1,27 @@
+{
+  "assemblyId": "20250101-abcdef12",
+  "account": "999999999999",
+  "columns": [
+    {"category": "identity", "name": "identity/LineItemId"},
+    {"category": "bill", "name": "bill/BillingPeriodStartDate"},
+    {"category": "lineItem", "name": "lineItem/UsageStartDate"},
+    {"category": "lineItem", "name": "lineItem/UnblendedCost"},
+    {"category": "lineItem", "name": "lineItem/UsageAccountId"},
+    {"category": "product", "name": "product/ProductCode"}
+  ],
+  "charset": "UTF-8",
+  "compression": "Parquet",
+  "contentType": "application/octet-stream",
+  "reportId": "report-12345",
+  "reportName": "my-cur-report",
+  "billingPeriod": {
+    "start": "20250101T000000.000Z",
+    "end": "20250201T000000.000Z"
+  },
+  "bucket": "my-cur-bucket",
+  "reportKeys": [
+    "cur-prefix/my-cur-report/20250101-20250201/20250101-abcdef12/my-cur-report-00001.snappy.parquet",
+    "cur-prefix/my-cur-report/20250101-20250201/20250101-abcdef12/my-cur-report-00002.snappy.parquet"
+  ],
+  "additionalArtifactKeys": []
+}

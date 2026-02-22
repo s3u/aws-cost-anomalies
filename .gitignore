@@ -1,0 +1,44 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+
+# DuckDB
+*.duckdb
+*.duckdb.wal
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+
+# Data cache
+data/
+cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+
+# Claude Code
+.claude/
+
+# Coverage
+.coverage
+htmlcov/
