@@ -70,8 +70,14 @@ def _run_question(
     region: str,
     max_tokens: int,
     max_iterations: int,
-) -> None:
-    """Send a question to the agent and display the response."""
+    history: list[dict] | None = None,
+    mcp_bridge=None,
+) -> list[dict] | None:
+    """Send a question to the agent and display the response.
+
+    Returns the updated conversation messages for multi-turn
+    context, or None on error.
+    """
     console.print(f"\n[dim]Thinking: {question}[/dim]")
     try:
         response = run_agent(
@@ -82,10 +88,12 @@ def _run_question(
             max_tokens=max_tokens,
             max_iterations=max_iterations,
             on_step=_on_agent_step,
+            history=history,
+            mcp_bridge=mcp_bridge,
         )
     except AgentError as e:
         console.print(f"[red]Error:[/red] {e}")
-        return
+        return history
 
     console.print("\n[bold]Answer:[/bold]")
     console.print(response.answer)
@@ -96,6 +104,8 @@ def _run_question(
             f"{response.input_tokens + response.output_tokens} "
             f"tokens used)[/dim]"
         )
+
+    return response.messages
 
 
 @app.command()
@@ -130,44 +140,76 @@ def query(
     max_tokens = settings.nlq.max_tokens
     max_iterations = settings.nlq.max_agent_iterations
 
-    if interactive:
-        console.print("[bold]AWS Cost Query Agent[/bold]")
-        console.print(
-            "Ask questions about your AWS costs in plain "
-            "English. Type 'exit' or 'quit' to leave.\n"
-        )
-
-        while True:
-            try:
-                q = console.input("[bold cyan]> [/bold cyan]")
-            except (EOFError, KeyboardInterrupt):
-                console.print("\nBye!")
-                break
-
-            q = q.strip()
-            if not q:
-                continue
-            if q.lower() in ("exit", "quit", "q"):
-                console.print("Bye!")
-                break
-
-            _run_question(
-                conn, q, model, region,
-                max_tokens, max_iterations,
+    # Set up MCP bridge if servers are configured
+    bridge = None
+    if settings.nlq.mcp_servers:
+        try:
+            from aws_cost_anomalies.nlq.mcp_bridge import MCPBridge
+        except ImportError:
+            console.print(
+                "[yellow]MCP servers configured but 'mcp' package "
+                "not installed.[/yellow]\n"
+                "Install with: [bold]pip install 'aws-cost-anomalies[mcp]'[/bold]"
             )
-            console.print()
+            raise typer.Exit(1)
 
-    elif question:
-        _run_question(
-            conn, question, model, region,
-            max_tokens, max_iterations,
-        )
+        bridge = MCPBridge(settings.nlq.mcp_servers)
+        try:
+            tool_count = bridge.connect()
+            console.print(
+                f"[dim]MCP: {tool_count} tools from "
+                f"{len(settings.nlq.mcp_servers)} server(s)[/dim]"
+            )
+        except Exception as e:
+            console.print(f"[yellow]MCP connection error: {e}[/yellow]")
+            bridge = None
 
-    else:
-        console.print(
-            "[yellow]Provide a question or use "
-            "--interactive for REPL mode.[/yellow]\n"
-            "Example: aws-cost-anomalies query "
-            "'What are my top 5 most expensive services?'"
-        )
-        raise typer.Exit(1)
+    try:
+        if interactive:
+            console.print("[bold]AWS Cost Query Agent[/bold]")
+            console.print(
+                "Ask questions about your AWS costs in plain "
+                "English. Type 'exit' or 'quit' to leave.\n"
+            )
+
+            history: list[dict] | None = None
+            while True:
+                try:
+                    q = console.input("[bold cyan]> [/bold cyan]")
+                except (EOFError, KeyboardInterrupt):
+                    console.print("\nBye!")
+                    break
+
+                q = q.strip()
+                if not q:
+                    continue
+                if q.lower() in ("exit", "quit", "q"):
+                    console.print("Bye!")
+                    break
+
+                history = _run_question(
+                    conn, q, model, region,
+                    max_tokens, max_iterations,
+                    history=history,
+                    mcp_bridge=bridge,
+                )
+                console.print()
+
+        elif question:
+            _run_question(
+                conn, question, model, region,
+                max_tokens, max_iterations,
+                mcp_bridge=bridge,
+            )
+
+        else:
+            console.print(
+                "[yellow]Provide a question or use "
+                "--interactive for REPL mode.[/yellow]\n"
+                "Example: aws-cost-anomalies query "
+                "'What are my top 5 most expensive services?'"
+            )
+            raise typer.Exit(1)
+    finally:
+        if bridge is not None:
+            bridge.close()

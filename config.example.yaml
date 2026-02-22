@@ -21,3 +21,16 @@ nlq:
   max_tokens: 4096                # Max tokens per agent response
   region: "us-east-1"             # Bedrock region (or set AWS_BEDROCK_REGION env var)
   max_agent_iterations: 10        # Max tool-use loops before stopping
+
+  # MCP (Model Context Protocol) servers — uncomment to enable
+  # Requires: pip install 'aws-cost-anomalies[mcp]'
+  # mcp_servers:
+  #   - name: "cloudtrail"
+  #     command: "uvx"
+  #     args: ["awslabs.cloudtrail-mcp-server@latest"]
+  #     env_passthrough:
+  #       - "AWS_ACCESS_KEY_ID"
+  #       - "AWS_SECRET_ACCESS_KEY"
+  #       - "AWS_SESSION_TOKEN"
+  #       - "AWS_PROFILE"
+  #       - "AWS_DEFAULT_REGION"

@@ -37,11 +37,23 @@ class AnomalyConfig:
 
 
 @dataclass
+class MCPServerConfigEntry:
+    """Configuration for a single MCP server."""
+
+    name: str
+    command: str
+    args: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)
+    env_passthrough: list[str] = field(default_factory=list)
+
+
+@dataclass
 class NlqConfig:
     model: str = "us.anthropic.claude-sonnet-4-20250514-v1:0"
     max_tokens: int = 4096
     region: str = "us-east-1"
     max_agent_iterations: int = 10
+    mcp_servers: list[MCPServerConfigEntry] = field(default_factory=list)
 
 
 @dataclass
@@ -167,6 +179,27 @@ def load_settings(
     )
 
     nlq_raw = raw.get("nlq", {})
+
+    mcp_servers: list[MCPServerConfigEntry] = []
+    for entry in nlq_raw.get("mcp_servers", []):
+        if not isinstance(entry, dict):
+            raise ConfigError("Each nlq.mcp_servers entry must be a mapping")
+        name = entry.get("name")
+        command = entry.get("command")
+        if not name or not command:
+            raise ConfigError(
+                "Each nlq.mcp_servers entry requires 'name' and 'command'"
+            )
+        mcp_servers.append(
+            MCPServerConfigEntry(
+                name=str(name),
+                command=str(command),
+                args=[str(a) for a in entry.get("args", [])],
+                env={str(k): str(v) for k, v in entry.get("env", {}).items()},
+                env_passthrough=[str(v) for v in entry.get("env_passthrough", [])],
+            )
+        )
+
     nlq = NlqConfig(
         model=str(
             nlq_raw.get(
@@ -188,6 +221,7 @@ def load_settings(
             "nlq.max_agent_iterations",
             10,
         ),
+        mcp_servers=mcp_servers,
     )
 
     return Settings(s3=s3, database=db, anomaly=anomaly, nlq=nlq)

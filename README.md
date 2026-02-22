@@ -8,6 +8,7 @@ Detect cost anomalies across your AWS root and linked accounts. Ingests Cost and
 - **Trend Analysis** — Daily cost trends grouped by service, account, or region with day-over-day changes
 - **Anomaly Detection** — Z-score based detection with configurable sensitivity and rolling windows
 - **Natural Language Queries** — Ask questions about your costs in plain English via an agentic system that uses DuckDB, Cost Explorer, CloudWatch, Budgets, and Organizations
+- **MCP Server Support** — Extend the NLQ agent with any [Model Context Protocol](https://modelcontextprotocol.io/) server (e.g. CloudTrail for "who launched that instance?")
 
 ## Prerequisites
 
@@ -72,6 +73,13 @@ nlq:
   max_tokens: 4096
   region: us-east-1               # Bedrock region
   max_agent_iterations: 10        # Max tool-use loops before stopping
+
+  # Optional: extend the agent with MCP servers
+  # mcp_servers:
+  #   - name: cloudtrail
+  #     command: uvx
+  #     args: [awslabs.cloudtrail-mcp-server@latest]
+  #     env_passthrough: [AWS_PROFILE, AWS_DEFAULT_REGION]
 ```
 
 ### Environment Variable Overrides
@@ -150,6 +158,16 @@ aws-cost-anomalies query --interactive
 
 The agent can query the local DuckDB database, call AWS Cost Explorer, check CloudWatch alarms, inspect Budgets, and look up Organization account names. Tool calls are displayed inline as the agent reasons.
 
+#### MCP Server Integration
+
+To extend the agent with external tools (e.g. CloudTrail), install the MCP extra and add servers to your config:
+
+```bash
+uv sync --extra mcp    # or: pip install "aws-cost-anomalies[mcp]"
+```
+
+Then add `mcp_servers` entries under `nlq` in `config.yaml` (see [Configuration](#configuration) above). The agent will automatically discover MCP tools at startup and use them when relevant.
+
 ## How It Works
 
 ### Ingestion
@@ -183,7 +201,7 @@ Uses a modified z-score algorithm over a rolling window:
 # Install dev dependencies
 uv sync --extra dev
 
-# Run unit tests (128 tests, evals excluded by default)
+# Run unit tests (153 tests, evals excluded by default)
 uv run pytest
 
 # Run with verbose output
@@ -235,7 +253,7 @@ src/aws_cost_anomalies/
 └── utils/         # Date helpers
 ```
 
-See [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md) for detailed architecture documentation.
+See [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md) for detailed architecture documentation and [docs/ANOMALIES.md](docs/ANOMALIES.md) for how anomaly detection works.
 
 ## License
 

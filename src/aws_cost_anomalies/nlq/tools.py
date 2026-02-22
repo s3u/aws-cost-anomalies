@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from aws_cost_anomalies.nlq.mcp_bridge import MCPBridge
 
 import boto3
 import duckdb
@@ -502,6 +505,7 @@ def execute_tool(
     tool_name: str,
     tool_input: dict,
     context: ToolContext,
+    mcp_bridge: MCPBridge | None = None,
 ) -> dict:
     """Dispatch a tool call to the appropriate executor.
 
@@ -509,10 +513,16 @@ def execute_tool(
     {"error": "..."} rather than raised, so the agent can adapt.
     """
     executor = _EXECUTORS.get(tool_name)
-    if not executor:
-        return {"error": f"Unknown tool: {tool_name}"}
+    if executor:
+        try:
+            return executor(tool_input, context)
+        except Exception as e:
+            return {"error": f"Tool execution failed: {e}"}
 
-    try:
-        return executor(tool_input, context)
-    except Exception as e:
-        return {"error": f"Tool execution failed: {e}"}
+    if mcp_bridge is not None and mcp_bridge.is_mcp_tool(tool_name):
+        try:
+            return mcp_bridge.call_tool(tool_name, tool_input)
+        except Exception as e:
+            return {"error": f"MCP tool execution failed: {e}"}
+
+    return {"error": f"Unknown tool: {tool_name}"}

@@ -262,3 +262,47 @@ class TestOnStepCallback:
         assert len(steps_seen) == 1
         assert steps_seen[0].tool_name == "query_cost_database"
         assert steps_seen[0].tool_result is not None
+
+
+class TestConversationMemory:
+    @patch("aws_cost_anomalies.nlq.agent.BedrockClient")
+    def test_response_includes_messages(self, MockClient, db_conn):
+        mock_client = MagicMock()
+        mock_client.converse.return_value = _bedrock_text_response(
+            "EC2 is the most expensive."
+        )
+        MockClient.return_value = mock_client
+
+        response = run_agent("top services?", db_conn)
+
+        assert len(response.messages) == 2
+        # First message is the user question
+        assert response.messages[0]["role"] == "user"
+        assert response.messages[0]["content"][0]["text"] == "top services?"
+        # Second message is the assistant answer
+        assert response.messages[1]["role"] == "assistant"
+
+    @patch("aws_cost_anomalies.nlq.agent.BedrockClient")
+    def test_history_passed_to_next_call(self, MockClient, db_conn):
+        mock_client = MagicMock()
+        mock_client.converse.return_value = _bedrock_text_response(
+            "EC2 is the most expensive."
+        )
+        MockClient.return_value = mock_client
+
+        # First question
+        resp1 = run_agent("top services?", db_conn)
+
+        # Second question with history from first
+        mock_client.converse.return_value = _bedrock_text_response(
+            "us-east-1 is the most expensive region."
+        )
+        resp2 = run_agent(
+            "how about by region?", db_conn, history=resp1.messages
+        )
+
+        # Response messages should contain the full conversation
+        # (user1, assistant1, user2, assistant2)
+        assert len(resp2.messages) == 4
+        assert resp2.messages[0]["content"][0]["text"] == "top services?"
+        assert resp2.messages[2]["content"][0]["text"] == "how about by region?"

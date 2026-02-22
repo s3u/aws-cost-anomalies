@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import duckdb
+
+if TYPE_CHECKING:
+    from aws_cost_anomalies.nlq.mcp_bridge import MCPBridge
 
 from aws_cost_anomalies.nlq.bedrock_client import (
     BedrockClient,
@@ -42,6 +45,7 @@ class AgentResponse:
     steps: list[AgentStep] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
+    messages: list[dict] = field(default_factory=list)
 
 
 def run_agent(
@@ -52,6 +56,8 @@ def run_agent(
     max_tokens: int = 4096,
     max_iterations: int = 10,
     on_step: Callable[[AgentStep], None] | None = None,
+    history: list[dict] | None = None,
+    mcp_bridge: MCPBridge | None = None,
 ) -> AgentResponse:
     """Run the agentic NLQ loop.
 
@@ -66,9 +72,11 @@ def run_agent(
         max_tokens: Max tokens per Converse call.
         max_iterations: Safety limit on agent loop iterations.
         on_step: Optional callback invoked after each tool execution.
+        history: Prior conversation messages for multi-turn context.
 
     Returns:
-        AgentResponse with the final answer, steps, and token usage.
+        AgentResponse with the final answer, steps, token usage,
+        and updated messages for follow-up questions.
 
     Raises:
         AgentError: On Bedrock failures or if the loop is exhausted.
@@ -80,11 +88,32 @@ def run_agent(
 
     context = ToolContext(db_conn=db_conn, aws_region=region)
 
-    system = [{"text": AGENT_SYSTEM_PROMPT}]
-    tool_config = {"tools": TOOL_DEFINITIONS}
-    messages: list[dict] = [
+    system_text = AGENT_SYSTEM_PROMPT
+    all_tools = list(TOOL_DEFINITIONS)
+
+    if mcp_bridge is not None:
+        mcp_defs = mcp_bridge.get_tool_definitions()
+        if mcp_defs:
+            all_tools.extend(mcp_defs)
+            mcp_descs = mcp_bridge.get_tool_descriptions()
+            if mcp_descs:
+                system_text += (
+                    "\n\n## External MCP Tools\n\n"
+                    "The following tools are provided by external MCP servers. "
+                    "Use them when the built-in tools cannot answer the question "
+                    "(e.g. CloudTrail for who launched resources, IAM for "
+                    "permissions).\n\n" + "\n".join(mcp_descs)
+                )
+
+    system = [{"text": system_text}]
+    tool_config = {"tools": all_tools}
+    if history:
+        messages: list[dict] = list(history)
+    else:
+        messages = []
+    messages.append(
         {"role": "user", "content": [{"text": question}]}
-    ]
+    )
 
     steps: list[AgentStep] = []
     total_input_tokens = 0
@@ -125,6 +154,7 @@ def run_agent(
                 steps=steps,
                 input_tokens=total_input_tokens,
                 output_tokens=total_output_tokens,
+                messages=messages,
             )
 
         # If tool_use, execute each tool call
@@ -147,7 +177,8 @@ def run_agent(
 
                 # Execute the tool
                 result = execute_tool(
-                    tool_name, tool_input, context
+                    tool_name, tool_input, context,
+                    mcp_bridge=mcp_bridge,
                 )
                 step.tool_result = result
 
@@ -184,6 +215,7 @@ def run_agent(
                 steps=steps,
                 input_tokens=total_input_tokens,
                 output_tokens=total_output_tokens,
+                messages=messages,
             )
         break
 
