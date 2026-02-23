@@ -11,9 +11,10 @@ if TYPE_CHECKING:
     from aws_cost_anomalies.agent.mcp_bridge import MCPBridge
     from aws_cost_anomalies.config.settings import Settings
 
-import boto3
 import duckdb
 from botocore.exceptions import ClientError, NoCredentialsError
+
+from aws_cost_anomalies.utils.aws import aws_session
 
 from aws_cost_anomalies.agent.executor import (
     UnsafeSQLError,
@@ -27,6 +28,7 @@ class ToolContext:
 
     db_conn: duckdb.DuckDBPyConnection
     aws_region: str = "us-east-1"
+    aws_profile: str = ""
     settings: Settings | None = None
 
 
@@ -337,7 +339,9 @@ def _execute_cost_explorer(
 ) -> dict:
     """Fetch data from AWS Cost Explorer."""
     try:
-        client = boto3.client("ce", region_name=context.aws_region)
+        client = aws_session(context.aws_profile).client(
+            "ce", region_name=context.aws_region
+        )
 
         kwargs: dict[str, Any] = {
             "TimePeriod": {
@@ -392,7 +396,7 @@ def _execute_cloudwatch(
     action = tool_input.get("action", "")
 
     try:
-        client = boto3.client(
+        client = aws_session(context.aws_profile).client(
             "cloudwatch", region_name=context.aws_region
         )
 
@@ -462,13 +466,14 @@ def _execute_budget_info(
     """Fetch AWS Budgets information."""
     try:
         account_id = tool_input.get("account_id")
+        session = aws_session(context.aws_profile)
         if not account_id:
-            sts = boto3.client(
+            sts = session.client(
                 "sts", region_name=context.aws_region
             )
             account_id = sts.get_caller_identity()["Account"]
 
-        client = boto3.client(
+        client = session.client(
             "budgets", region_name=context.aws_region
         )
         response = client.describe_budgets(AccountId=account_id)
@@ -508,7 +513,7 @@ def _execute_organization_info(
 ) -> dict:
     """Fetch AWS Organizations account info."""
     try:
-        client = boto3.client(
+        client = aws_session(context.aws_profile).client(
             "organizations", region_name=context.aws_region
         )
 
@@ -591,6 +596,7 @@ def _execute_ingest_cost_explorer(
             end_date=end,
             region=ce_region,
             on_page=on_page,
+            profile=context.aws_profile,
         )
     except CostExplorerError as e:
         return {"error": str(e)}
@@ -660,6 +666,7 @@ def _execute_ingest_cur_data(
             prefix=s3_cfg.prefix,
             report_name=s3_cfg.report_name,
             region=s3_cfg.region,
+            profile=context.aws_profile,
         )
     except S3Error as e:
         return {"error": f"S3 connection error: {e}"}

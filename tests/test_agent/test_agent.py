@@ -90,6 +90,20 @@ class TestDirectAnswer:
         assert response.output_tokens == 50
 
 
+class TestProfileForwarding:
+    @patch("aws_cost_anomalies.agent.agent.BedrockClient")
+    def test_profile_forwarded_to_bedrock(self, MockClient, db_conn):
+        mock_client = MagicMock()
+        mock_client.converse.return_value = _bedrock_text_response("ok")
+        MockClient.return_value = mock_client
+
+        run_agent("q", db_conn, profile="cross-account-bedrock")
+
+        MockClient.assert_called_once_with(
+            region="us-east-1", profile="cross-account-bedrock"
+        )
+
+
 class TestToolCallFlow:
     @patch("aws_cost_anomalies.agent.agent.BedrockClient")
     def test_tool_call_then_answer(self, MockClient, db_conn):

@@ -87,10 +87,28 @@ agent:
   #     env_passthrough: [AWS_PROFILE, AWS_DEFAULT_REGION]
 ```
 
+### Cross-Account Setup
+
+If your cost data lives in a root/management account but you run Bedrock from a dev account, use named AWS profiles:
+
+```yaml
+aws_profile: "root-readonly"    # Used for CE, S3, CloudWatch, Budgets, Orgs
+
+agent:
+  profile: "dev-bedrock"        # Used for Bedrock only; falls back to aws_profile
+```
+
+- `aws_profile` applies to all AWS API calls **except** Bedrock (env override: `AWS_COST_PROFILE`)
+- `agent.profile` applies to Bedrock only; if omitted, falls back to `aws_profile` (env override: `AWS_BEDROCK_PROFILE`)
+- When both are empty (default), the standard credential chain is used (identical to previous behavior)
+- `AWS_PROFILE` continues to work natively via boto3
+
 ### Environment Variable Overrides
 
 | Variable | Overrides |
 |----------|-----------|
+| `AWS_COST_PROFILE` | `aws_profile` (cost-data AWS profile) |
+| `AWS_BEDROCK_PROFILE` | `agent.profile` (Bedrock AWS profile) |
 | `AWS_COST_DB_PATH` | `database.path` |
 | `AWS_COST_CACHE_DIR` | `database.cache_dir` |
 | `AWS_BEDROCK_REGION` | `agent.region` (Bedrock region) |

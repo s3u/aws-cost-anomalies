@@ -130,8 +130,8 @@ class TestQueryCostDatabase:
 
 
 class TestCostExplorer:
-    @patch("aws_cost_anomalies.agent.tools.boto3.client")
-    def test_basic_cost_query(self, mock_boto_client, context):
+    @patch("aws_cost_anomalies.utils.aws.boto3.Session")
+    def test_basic_cost_query(self, mock_session_cls, context):
         mock_ce = MagicMock()
         mock_ce.get_cost_and_usage.return_value = {
             "ResultsByTime": [
@@ -153,7 +153,7 @@ class TestCostExplorer:
                 }
             ]
         }
-        mock_boto_client.return_value = mock_ce
+        mock_session_cls.return_value.client.return_value = mock_ce
 
         result = execute_tool(
             "get_cost_explorer_data",
@@ -169,8 +169,8 @@ class TestCostExplorer:
         assert len(result["results"]) == 1
         assert result["results"][0]["total_unblended_cost"] == "1234.56"
 
-    @patch("aws_cost_anomalies.agent.tools.boto3.client")
-    def test_grouped_results(self, mock_boto_client, context):
+    @patch("aws_cost_anomalies.utils.aws.boto3.Session")
+    def test_grouped_results(self, mock_session_cls, context):
         mock_ce = MagicMock()
         mock_ce.get_cost_and_usage.return_value = {
             "ResultsByTime": [
@@ -198,7 +198,7 @@ class TestCostExplorer:
                 }
             ]
         }
-        mock_boto_client.return_value = mock_ce
+        mock_session_cls.return_value.client.return_value = mock_ce
 
         result = execute_tool(
             "get_cost_explorer_data",
@@ -216,10 +216,48 @@ class TestCostExplorer:
         assert len(groups) == 2
         assert groups[0]["key"] == "AmazonEC2"
 
+    @patch("aws_cost_anomalies.utils.aws.boto3.Session")
+    def test_profile_forwarded_to_session(self, mock_session_cls, db_conn):
+        mock_ce = MagicMock()
+        mock_ce.get_cost_and_usage.return_value = {
+            "ResultsByTime": [
+                {
+                    "TimePeriod": {
+                        "Start": "2025-01-01",
+                        "End": "2025-01-02",
+                    },
+                    "Total": {
+                        "UnblendedCost": {"Amount": "10", "Unit": "USD"},
+                        "BlendedCost": {"Amount": "10", "Unit": "USD"},
+                    },
+                }
+            ]
+        }
+        mock_session_cls.return_value.client.return_value = mock_ce
+
+        ctx = ToolContext(
+            db_conn=db_conn, aws_region="us-east-1",
+            aws_profile="root-readonly",
+        )
+        result = execute_tool(
+            "get_cost_explorer_data",
+            {
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-02",
+                "granularity": "DAILY",
+            },
+            ctx,
+        )
+
+        assert "error" not in result
+        mock_session_cls.assert_called_once_with(
+            profile_name="root-readonly"
+        )
+
 
 class TestCloudWatch:
-    @patch("aws_cost_anomalies.agent.tools.boto3.client")
-    def test_describe_alarms(self, mock_boto_client, context):
+    @patch("aws_cost_anomalies.utils.aws.boto3.Session")
+    def test_describe_alarms(self, mock_session_cls, context):
         mock_cw = MagicMock()
         mock_cw.describe_alarms.return_value = {
             "MetricAlarms": [
@@ -232,7 +270,7 @@ class TestCloudWatch:
                 }
             ]
         }
-        mock_boto_client.return_value = mock_cw
+        mock_session_cls.return_value.client.return_value = mock_cw
 
         result = execute_tool(
             "get_cloudwatch_metrics",
@@ -244,9 +282,9 @@ class TestCloudWatch:
         assert result["count"] == 1
         assert result["alarms"][0]["name"] == "HighBilling"
 
-    @patch("aws_cost_anomalies.agent.tools.boto3.client")
-    def test_unknown_action(self, mock_boto_client, context):
-        mock_boto_client.return_value = MagicMock()
+    @patch("aws_cost_anomalies.utils.aws.boto3.Session")
+    def test_unknown_action(self, mock_session_cls, context):
+        mock_session_cls.return_value.client.return_value = MagicMock()
         result = execute_tool(
             "get_cloudwatch_metrics",
             {"action": "bad_action"},
@@ -256,8 +294,8 @@ class TestCloudWatch:
 
 
 class TestBudgetInfo:
-    @patch("aws_cost_anomalies.agent.tools.boto3.client")
-    def test_describe_budgets(self, mock_boto_client, context):
+    @patch("aws_cost_anomalies.utils.aws.boto3.Session")
+    def test_describe_budgets(self, mock_session_cls, context):
         mock_sts = MagicMock()
         mock_sts.get_caller_identity.return_value = {
             "Account": "111111111111"
@@ -286,7 +324,7 @@ class TestBudgetInfo:
                 return mock_sts
             return mock_budgets
 
-        mock_boto_client.side_effect = _make_client
+        mock_session_cls.return_value.client.side_effect = _make_client
 
         result = execute_tool(
             "get_budget_info", {}, context
@@ -299,8 +337,8 @@ class TestBudgetInfo:
 
 
 class TestOrganizationInfo:
-    @patch("aws_cost_anomalies.agent.tools.boto3.client")
-    def test_list_accounts(self, mock_boto_client, context):
+    @patch("aws_cost_anomalies.utils.aws.boto3.Session")
+    def test_list_accounts(self, mock_session_cls, context):
         mock_org = MagicMock()
         paginator = MagicMock()
         paginator.paginate.return_value = [
@@ -322,7 +360,7 @@ class TestOrganizationInfo:
             }
         ]
         mock_org.get_paginator.return_value = paginator
-        mock_boto_client.return_value = mock_org
+        mock_session_cls.return_value.client.return_value = mock_org
 
         result = execute_tool(
             "get_organization_info", {}, context
@@ -332,8 +370,8 @@ class TestOrganizationInfo:
         assert result["count"] == 2
         assert result["accounts"][0]["name"] == "Production"
 
-    @patch("aws_cost_anomalies.agent.tools.boto3.client")
-    def test_describe_single_account(self, mock_boto_client, context):
+    @patch("aws_cost_anomalies.utils.aws.boto3.Session")
+    def test_describe_single_account(self, mock_session_cls, context):
         mock_org = MagicMock()
         mock_org.describe_account.return_value = {
             "Account": {
@@ -343,7 +381,7 @@ class TestOrganizationInfo:
                 "Status": "ACTIVE",
             }
         }
-        mock_boto_client.return_value = mock_org
+        mock_session_cls.return_value.client.return_value = mock_org
 
         result = execute_tool(
             "get_organization_info",

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
+
+from aws_cost_anomalies.utils.aws import aws_session
 
 
 class BedrockError(Exception):
@@ -15,9 +16,9 @@ class BedrockError(Exception):
 class BedrockClient:
     """Thin wrapper around boto3 bedrock-runtime Converse API."""
 
-    def __init__(self, region: str = "us-east-1"):
+    def __init__(self, region: str = "us-east-1", profile: str = ""):
         try:
-            self.client = boto3.client(
+            self.client = aws_session(profile).client(
                 "bedrock-runtime", region_name=region
             )
         except NoCredentialsError:

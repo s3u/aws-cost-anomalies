@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
+
+from aws_cost_anomalies.utils.aws import aws_session
 
 from aws_cost_anomalies.ingestion.manifest import (
     CURManifest,
@@ -28,12 +29,13 @@ class CURBrowser:
         prefix: str,
         report_name: str,
         region: str = "us-east-1",
+        profile: str = "",
     ):
         self.bucket = bucket
         self.prefix = prefix.rstrip("/")
         self.report_name = report_name
         try:
-            self.s3 = boto3.client("s3", region_name=region)
+            self.s3 = aws_session(profile).client("s3", region_name=region)
         except NoCredentialsError:
             raise S3Error(
                 "AWS credentials not found. Configure credentials "

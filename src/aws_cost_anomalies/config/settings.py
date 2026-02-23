@@ -60,11 +60,13 @@ class AgentConfig:
     max_tokens: int = 4096
     region: str = "us-east-1"
     max_agent_iterations: int = 10
+    profile: str = ""
     mcp_servers: list[MCPServerConfigEntry] = field(default_factory=list)
 
 
 @dataclass
 class Settings:
+    aws_profile: str = ""
     s3: S3Config = field(default_factory=S3Config)
     database: DatabaseConfig = field(
         default_factory=DatabaseConfig
@@ -194,6 +196,11 @@ def load_settings(
         ),
     )
 
+    aws_profile = os.environ.get(
+        "AWS_COST_PROFILE",
+        str(raw.get("aws_profile", "")),
+    )
+
     agent_raw = raw.get("agent", {})
 
     mcp_servers: list[MCPServerConfigEntry] = []
@@ -237,6 +244,10 @@ def load_settings(
             "agent.max_agent_iterations",
             10,
         ),
+        profile=os.environ.get(
+            "AWS_BEDROCK_PROFILE",
+            str(agent_raw.get("profile", "")),
+        ),
         mcp_servers=mcp_servers,
     )
 
@@ -259,6 +270,7 @@ def load_settings(
     )
 
     return Settings(
+        aws_profile=aws_profile,
         s3=s3,
         database=db,
         anomaly=anomaly,

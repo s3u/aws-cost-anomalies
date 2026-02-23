@@ -101,6 +101,8 @@ def _run_question(
     history: list[dict] | None = None,
     mcp_bridge=None,
     verbose: bool = False,
+    profile: str = "",
+    aws_profile: str = "",
 ) -> list[dict] | None:
     """Send a question to the agent and display the response.
 
@@ -120,6 +122,8 @@ def _run_question(
             history=history,
             mcp_bridge=mcp_bridge,
             settings=settings,
+            profile=profile,
+            aws_profile=aws_profile,
         )
     except AgentError as e:
         console.print(f"[red]Error:[/red] {e}")
@@ -168,6 +172,8 @@ def query(
     region = settings.agent.region
     max_tokens = settings.agent.max_tokens
     max_iterations = settings.agent.max_agent_iterations
+    bedrock_profile = settings.agent.profile or settings.aws_profile
+    cost_profile = settings.aws_profile
 
     # Set up MCP bridge if servers are configured
     bridge = None
@@ -232,6 +238,8 @@ def query(
                     history=history,
                     mcp_bridge=bridge,
                     verbose=verbose,
+                    profile=bedrock_profile,
+                    aws_profile=cost_profile,
                 )
                 console.print()
 
@@ -242,6 +250,8 @@ def query(
                 settings=settings,
                 mcp_bridge=bridge,
                 verbose=verbose,
+                profile=bedrock_profile,
+                aws_profile=cost_profile,
             )
 
         else:

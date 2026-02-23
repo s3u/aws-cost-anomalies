@@ -60,6 +60,8 @@ def run_agent(
     history: list[dict] | None = None,
     mcp_bridge: MCPBridge | None = None,
     settings: Settings | None = None,
+    profile: str = "",
+    aws_profile: str = "",
 ) -> AgentResponse:
     """Run the agentic loop.
 
@@ -77,6 +79,9 @@ def run_agent(
             and after (tool_result set) each tool execution.
         history: Prior conversation messages for multi-turn context.
         settings: Application settings (for ingestion tools).
+        profile: Named AWS profile for Bedrock API calls.
+        aws_profile: Named AWS profile for cost-data API calls
+            (CE, S3, CloudWatch, Budgets, Orgs).
 
     Returns:
         AgentResponse with the final answer, steps, token usage,
@@ -86,12 +91,15 @@ def run_agent(
         AgentError: On Bedrock failures or if the loop is exhausted.
     """
     try:
-        client = BedrockClient(region=region)
+        client = BedrockClient(region=region, profile=profile)
     except BedrockError as e:
         raise AgentError(str(e))
 
     context = ToolContext(
-        db_conn=db_conn, aws_region=region, settings=settings
+        db_conn=db_conn,
+        aws_region=region,
+        aws_profile=aws_profile,
+        settings=settings,
     )
 
     system_text = AGENT_SYSTEM_PROMPT

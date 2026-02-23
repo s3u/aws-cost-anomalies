@@ -80,6 +80,7 @@ def _ingest_cur(
             prefix=settings.s3.prefix,
             report_name=settings.s3.report_name,
             region=settings.s3.region,
+            profile=settings.aws_profile,
         )
     except S3Error as e:
         console.print(f"[red]Error:[/red] {e}")
@@ -263,6 +264,7 @@ def _ingest_cost_explorer(
                 end_date=end_date.isoformat(),
                 region=settings.cost_explorer.region,
                 on_page=on_page,
+                profile=settings.aws_profile,
             )
         except CostExplorerError as e:
             console.print(f"[red]Error:[/red] {e}")

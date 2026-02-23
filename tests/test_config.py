@@ -128,3 +128,56 @@ def test_cost_explorer_region_env_override(monkeypatch):
     monkeypatch.setenv("AWS_COST_EXPLORER_REGION", "ap-southeast-1")
     settings = load_settings(None)
     assert settings.cost_explorer.region == "ap-southeast-1"
+
+
+def test_default_profiles_are_empty():
+    settings = Settings()
+    assert settings.aws_profile == ""
+    assert settings.agent.profile == ""
+
+
+def test_aws_profile_from_yaml():
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as f:
+        f.write("aws_profile: root-readonly\n")
+        f.flush()
+        settings = load_settings(f.name)
+    assert settings.aws_profile == "root-readonly"
+
+
+def test_agent_profile_from_yaml():
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as f:
+        f.write(
+            "aws_profile: root-readonly\n"
+            "agent:\n"
+            "  profile: dev-bedrock\n"
+        )
+        f.flush()
+        settings = load_settings(f.name)
+    assert settings.aws_profile == "root-readonly"
+    assert settings.agent.profile == "dev-bedrock"
+
+
+def test_bedrock_profile_env_override(monkeypatch):
+    monkeypatch.setenv("AWS_BEDROCK_PROFILE", "env-profile")
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as f:
+        f.write("agent:\n  profile: yaml-profile\n")
+        f.flush()
+        settings = load_settings(f.name)
+    assert settings.agent.profile == "env-profile"
+
+
+def test_aws_cost_profile_env_override(monkeypatch):
+    monkeypatch.setenv("AWS_COST_PROFILE", "env-root")
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as f:
+        f.write("aws_profile: yaml-root\n")
+        f.flush()
+        settings = load_settings(f.name)
+    assert settings.aws_profile == "env-root"

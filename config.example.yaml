@@ -1,6 +1,10 @@
 # AWS Cost Anomalies configuration
 # Copy this to config.yaml and update with your values.
 
+# AWS named profile for cost data APIs (CE, S3, CloudWatch, Budgets, Orgs).
+# Leave empty or omit to use the default credential chain.
+# aws_profile: "root-readonly"
+
 s3:
   bucket: "your-cur-bucket-name"
   prefix: "cur-reports"           # S3 prefix where CUR reports are stored
@@ -25,6 +29,8 @@ agent:
   max_tokens: 4096                # Max tokens per agent response
   region: "us-east-1"             # Bedrock region (or set AWS_BEDROCK_REGION env var)
   max_agent_iterations: 10        # Max tool-use loops before stopping
+  # profile: "dev-bedrock"        # AWS profile for Bedrock (falls back to aws_profile)
+                                   # Override with AWS_BEDROCK_PROFILE env var
 
   # MCP (Model Context Protocol) servers — uncomment to enable
   # Requires: pip install 'aws-cost-anomalies[mcp]'

@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Callable
 
-import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
+
+from aws_cost_anomalies.utils.aws import aws_session
 
 
 class CostExplorerError(Exception):
@@ -74,6 +75,7 @@ def fetch_cost_explorer_data(
     end_date: str,
     region: str = "us-east-1",
     on_page: Callable[[int, int], None] | None = None,
+    profile: str = "",
 ) -> list[CostExplorerRow]:
     """Fetch daily cost data from Cost Explorer grouped by SERVICE and LINKED_ACCOUNT.
 
@@ -82,6 +84,7 @@ def fetch_cost_explorer_data(
         end_date: End date YYYY-MM-DD (exclusive).
         region: AWS region for the CE API endpoint.
         on_page: Optional callback(page_num, rows_so_far) for progress.
+        profile: Named AWS profile for credentials.
 
     Returns:
         List of CostExplorerRow, one per day+service+account combination.
@@ -91,7 +94,7 @@ def fetch_cost_explorer_data(
         CostExplorerError: On API or credential failures.
     """
     try:
-        client = boto3.client("ce", region_name=region)
+        client = aws_session(profile).client("ce", region_name=region)
     except NoCredentialsError:
         raise CostExplorerError(
             "AWS credentials not found. Configure credentials to use "
