@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the NLQ agent in interactive REPL mode.
+# Launch the agent in interactive REPL mode.
 #
 # Usage:
 #   ./scripts/query.sh                        # interactive REPL

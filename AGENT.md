@@ -23,7 +23,7 @@ pytest
   - `ingestion/` — S3 CUR download + parquet loading
   - `storage/` — DuckDB connection + schema
   - `analysis/` — trend aggregation + z-score anomaly detection
-  - `nlq/` — Bedrock-powered agentic NLQ system
+  - `agent/` — Bedrock-powered agentic system
     - `agent.py` — Agent loop: Bedrock Converse → tool dispatch → loop
     - `bedrock_client.py` — Boto3 bedrock-runtime wrapper
     - `tools.py` — Tool definitions (DuckDB, Cost Explorer, CloudWatch, Budgets, Organizations)
@@ -45,8 +45,8 @@ aws-cost-anomalies query     [--config] [--interactive] "question text"
 - **Parquet-first**: CUR data loaded via DuckDB's `read_parquet()` with column mapping for both CUR v1 and v2 formats
 - **Incremental ingestion**: tracks `assemblyId` per billing period to avoid re-ingesting unchanged data
 - **Z-score anomaly detection**: modified z-score over rolling window with configurable sensitivity
-- **Agentic NLQ**: Bedrock Converse API with tool-use loop — agent can query DuckDB, Cost Explorer, CloudWatch, Budgets, and Organizations
-- **SQL safety**: NLQ executor validates all queries are read-only before execution
+- **Agentic queries**: Bedrock Converse API with tool-use loop — agent can query DuckDB, Cost Explorer, CloudWatch, Budgets, and Organizations
+- **SQL safety**: agent executor validates all queries are read-only before execution
 
 ## Configuration
 Copy `config.example.yaml` to `config.yaml`. Environment variables override config:

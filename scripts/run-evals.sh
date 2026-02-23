@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the NLQ agent correctness evals.
+# Run the agent correctness evals.
 # Requires AWS Bedrock credentials to be configured.
 #
 # Usage:

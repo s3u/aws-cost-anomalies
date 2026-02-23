@@ -11,9 +11,9 @@ AWS Cost Anomalies is a Python CLI tool that ingests AWS Cost and Usage Report (
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                          CLI Layer (Typer)                      │
-│    ingest   │   trends   │   anomalies   │   query (NLQ)        │
+│    ingest   │   trends   │   anomalies   │   query (agent)      │
 ├─────────────┼────────────┼───────────────┼──────────────────────┤
-│  Ingestion  │       Analysis Layer       │     NLQ Layer        │
+│  Ingestion  │       Analysis Layer       │     Agent Layer      │
 │  Pipeline   │  trends.py │ anomalies.py  │ agent.py             │
 │  s3_client  │            │               │ bedrock_client.py    │
 │  manifest   │            │               │ tools.py             │
@@ -36,7 +36,7 @@ src/aws_cost_anomalies/
 │   ├── ingest.py         # `ingest` command
 │   ├── trends.py         # `trends` command
 │   ├── anomalies.py      # `anomalies` command
-│   ├── query.py          # `query` command (NLQ REPL)
+│   ├── query.py          # `query` command (agent REPL)
 │   └── formatting.py     # Rich table helpers
 ├── config/
 │   └── settings.py       # YAML + env var config loader
@@ -50,7 +50,7 @@ src/aws_cost_anomalies/
 ├── analysis/
 │   ├── trends.py         # Daily trend aggregation via SQL
 │   └── anomalies.py      # Z-score anomaly detection
-├── nlq/
+├── agent/
 │   ├── agent.py          # Agentic loop: Bedrock Converse → tool dispatch
 │   ├── bedrock_client.py # Boto3 bedrock-runtime wrapper
 │   ├── tools.py          # Tool definitions + executors (DuckDB, CE, CW, Budgets, Orgs)
@@ -75,7 +75,7 @@ Config is resolved with this priority: **environment variables > YAML file > def
 | `S3Config` | bucket, prefix, report_name, region | region=`us-east-1` |
 | `DatabaseConfig` | path, cache_dir | `./data/costs.duckdb`, `./data/cache` |
 | `AnomalyConfig` | rolling_window_days, z_score_threshold, min_daily_cost | 14, 2.5, 1.0 |
-| `NlqConfig` | model, max_tokens, region, max_agent_iterations | `us.anthropic.claude-sonnet-4-20250514-v1:0`, 4096, `us-east-1`, 10 |
+| `AgentConfig` | model, max_tokens, region, max_agent_iterations | `us.anthropic.claude-sonnet-4-20250514-v1:0`, 4096, `us-east-1`, 10 |
 
 ### Config Loading Flow
 
@@ -87,7 +87,7 @@ load_settings(config_path)
   ├── Apply env var overrides:
   │     AWS_COST_DB_PATH → database.path
   │     AWS_COST_CACHE_DIR → database.cache_dir
-  │     AWS_BEDROCK_REGION → nlq.region
+  │     AWS_BEDROCK_REGION → agent.region
   └── Validate types + ranges via _safe_int(), _safe_float()
 ```
 
@@ -309,11 +309,11 @@ Simple aggregation of total daily cost across all dimensions. Used by the `trend
 
 ## Natural Language Query — Agentic System
 
-**Files:** `nlq/agent.py`, `nlq/bedrock_client.py`, `nlq/tools.py`, `nlq/executor.py`, `nlq/prompts.py`
+**Files:** `agent/agent.py`, `agent/bedrock_client.py`, `agent/tools.py`, `agent/executor.py`, `agent/prompts.py`
 
 ### Architecture
 
-The NLQ system uses an agentic loop powered by AWS Bedrock Converse API. Instead of one-shot text-to-SQL translation, the agent reasons, calls tools, and produces a formatted final answer.
+The agent system uses an agentic loop powered by AWS Bedrock Converse API. Instead of one-shot text-to-SQL translation, the agent reasons, calls tools, and produces a formatted final answer.
 
 ### Agent Loop Flow
 
@@ -446,9 +446,9 @@ Custom exception hierarchy for user-friendly error messages:
 |-----------|--------|---------|
 | `ConfigError` | config.settings | Invalid YAML, bad types, out-of-range values |
 | `S3Error` | ingestion.s3_client | AWS credentials, permissions, missing buckets |
-| `AgentError` | nlq.agent | Bedrock API / agent loop failures |
-| `BedrockError` | nlq.bedrock_client | Bedrock runtime errors |
-| `UnsafeSQLError` | nlq.executor | Forbidden SQL operations |
+| `AgentError` | agent.agent | Bedrock API / agent loop failures |
+| `BedrockError` | agent.bedrock_client | Bedrock runtime errors |
+| `UnsafeSQLError` | agent.executor | Forbidden SQL operations |
 
 All CLI commands catch these exceptions and display colored error messages via Rich. Individual file/period failures during ingestion are non-fatal — the pipeline continues and reports errors inline.
 
@@ -520,7 +520,7 @@ Python 3.12 slim image with git installed. Two-stage pip install: first `pyproje
 
 4. **CUR v1/v2 dual support** — Column mapping dictionaries normalize both CUR formats into a single schema. Auto-detected from parquet column names.
 
-5. **SQL safety via pattern matching** — NLQ queries are validated with regex-based forbidden keyword detection rather than SQL parsing. Simple, effective, catches subquery injection.
+5. **SQL safety via pattern matching** — Agent queries are validated with regex-based forbidden keyword detection rather than SQL parsing. Simple, effective, catches subquery injection.
 
 6. **Non-fatal ingestion errors** — Individual file or period failures are logged but don't abort the entire pipeline. Partial ingestion is better than no ingestion.
 
@@ -546,16 +546,16 @@ Python 3.12 slim image with git installed. Two-stage pip install: first `pyproje
 
 Replace or extend `detect_anomalies()` in `analysis/anomalies.py`. The function takes a DuckDB connection and returns `list[Anomaly]`. The CLI layer is decoupled from the algorithm.
 
-### Adding a new NLQ-queryable table
+### Adding a new agent-queryable table
 
 1. Add DDL in `storage/schema.py`
-2. Update `SCHEMA_DESCRIPTION` in `nlq/prompts.py`
+2. Update `SCHEMA_DESCRIPTION` in `agent/prompts.py`
 3. Add population logic during ingestion if needed
 
 ### Adding a new agent tool
 
-1. Add a `toolSpec` definition dict in `nlq/tools.py`
+1. Add a `toolSpec` definition dict in `agent/tools.py`
 2. Write an executor function following the pattern: `_execute_<name>(tool_input, context) -> dict`
 3. Register the executor in `_EXECUTORS` and add the spec to `TOOL_DEFINITIONS`
-4. Update the agent system prompt in `nlq/prompts.py` to describe the new tool
-5. Add tests in `tests/test_nlq/test_tools.py` with mocked boto3
+4. Update the agent system prompt in `agent/prompts.py` to describe the new tool
+5. Add tests in `tests/test_agent/test_tools.py` with mocked boto3

@@ -1,4 +1,4 @@
-"""Tests for the NLQ agent loop (mocked Bedrock)."""
+"""Tests for the agent loop (mocked Bedrock)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import duckdb
 import pytest
 
-from aws_cost_anomalies.nlq.agent import (
+from aws_cost_anomalies.agent import (
     AgentError,
     AgentResponse,
     AgentStep,
@@ -73,7 +73,7 @@ def _bedrock_tool_use_response(
 
 
 class TestDirectAnswer:
-    @patch("aws_cost_anomalies.nlq.agent.BedrockClient")
+    @patch("aws_cost_anomalies.agent.agent.BedrockClient")
     def test_direct_text_answer(self, MockClient, db_conn):
         mock_client = MagicMock()
         mock_client.converse.return_value = _bedrock_text_response(
@@ -91,7 +91,7 @@ class TestDirectAnswer:
 
 
 class TestToolCallFlow:
-    @patch("aws_cost_anomalies.nlq.agent.BedrockClient")
+    @patch("aws_cost_anomalies.agent.agent.BedrockClient")
     def test_tool_call_then_answer(self, MockClient, db_conn):
         mock_client = MagicMock()
 
@@ -130,7 +130,7 @@ class TestToolCallFlow:
         assert response.input_tokens == 180  # 80 + 100
         assert response.output_tokens == 90  # 40 + 50
 
-    @patch("aws_cost_anomalies.nlq.agent.BedrockClient")
+    @patch("aws_cost_anomalies.agent.agent.BedrockClient")
     def test_multiple_tool_calls(self, MockClient, db_conn):
         mock_client = MagicMock()
 
@@ -165,11 +165,11 @@ class TestToolCallFlow:
 
 
 class TestErrorHandling:
-    @patch("aws_cost_anomalies.nlq.agent.BedrockClient")
+    @patch("aws_cost_anomalies.agent.agent.BedrockClient")
     def test_bedrock_error_raises_agent_error(
         self, MockClient, db_conn
     ):
-        from aws_cost_anomalies.nlq.bedrock_client import (
+        from aws_cost_anomalies.agent.bedrock_client import (
             BedrockError,
         )
 
@@ -182,9 +182,9 @@ class TestErrorHandling:
         with pytest.raises(AgentError, match="Access denied"):
             run_agent("test", db_conn)
 
-    @patch("aws_cost_anomalies.nlq.agent.BedrockClient")
+    @patch("aws_cost_anomalies.agent.agent.BedrockClient")
     def test_credentials_error(self, MockClient, db_conn):
-        from aws_cost_anomalies.nlq.bedrock_client import (
+        from aws_cost_anomalies.agent.bedrock_client import (
             BedrockError,
         )
 
@@ -195,7 +195,7 @@ class TestErrorHandling:
         with pytest.raises(AgentError, match="credentials"):
             run_agent("test", db_conn)
 
-    @patch("aws_cost_anomalies.nlq.agent.BedrockClient")
+    @patch("aws_cost_anomalies.agent.agent.BedrockClient")
     def test_max_iterations_exceeded(self, MockClient, db_conn):
         mock_client = MagicMock()
 
@@ -211,7 +211,7 @@ class TestErrorHandling:
         with pytest.raises(AgentError, match="iterations"):
             run_agent("loop forever", db_conn, max_iterations=3)
 
-    @patch("aws_cost_anomalies.nlq.agent.BedrockClient")
+    @patch("aws_cost_anomalies.agent.agent.BedrockClient")
     def test_tool_error_returned_to_agent(
         self, MockClient, db_conn
     ):
@@ -240,7 +240,7 @@ class TestErrorHandling:
 
 
 class TestOnStepCallback:
-    @patch("aws_cost_anomalies.nlq.agent.BedrockClient")
+    @patch("aws_cost_anomalies.agent.agent.BedrockClient")
     def test_callback_invoked(self, MockClient, db_conn):
         mock_client = MagicMock()
         mock_client.converse.side_effect = [
@@ -265,7 +265,7 @@ class TestOnStepCallback:
 
 
 class TestConversationMemory:
-    @patch("aws_cost_anomalies.nlq.agent.BedrockClient")
+    @patch("aws_cost_anomalies.agent.agent.BedrockClient")
     def test_response_includes_messages(self, MockClient, db_conn):
         mock_client = MagicMock()
         mock_client.converse.return_value = _bedrock_text_response(
@@ -282,7 +282,7 @@ class TestConversationMemory:
         # Second message is the assistant answer
         assert response.messages[1]["role"] == "assistant"
 
-    @patch("aws_cost_anomalies.nlq.agent.BedrockClient")
+    @patch("aws_cost_anomalies.agent.agent.BedrockClient")
     def test_history_passed_to_next_call(self, MockClient, db_conn):
         mock_client = MagicMock()
         mock_client.converse.return_value = _bedrock_text_response(

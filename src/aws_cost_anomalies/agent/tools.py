@@ -1,4 +1,4 @@
-"""Tool definitions and executors for the NLQ agent."""
+"""Tool definitions and executors for the agent."""
 
 from __future__ import annotations
 
@@ -8,13 +8,13 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from aws_cost_anomalies.nlq.mcp_bridge import MCPBridge
+    from aws_cost_anomalies.agent.mcp_bridge import MCPBridge
 
 import boto3
 import duckdb
 from botocore.exceptions import ClientError, NoCredentialsError
 
-from aws_cost_anomalies.nlq.executor import (
+from aws_cost_anomalies.agent.executor import (
     UnsafeSQLError,
     execute_query,
 )

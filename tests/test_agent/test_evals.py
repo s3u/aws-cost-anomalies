@@ -1,4 +1,4 @@
-"""NLQ agent evals — correctness tests against real Bedrock.
+"""Agent evals — correctness tests against real Bedrock.
 
 These evals verify the agent produces **numerically correct** answers
 by asserting against pre-computed golden values from the deterministic
@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from aws_cost_anomalies.nlq.agent import AgentError, run_agent
+from aws_cost_anomalies.agent import AgentError, run_agent
 
 from .eval_fixtures import (
     ACCOUNT_SERVICE_TOTALS,
@@ -56,19 +56,19 @@ def _patch_aws_tools():
     """Prevent evals from calling real AWS APIs (Cost Explorer, etc.)."""
     with (
         patch(
-            "aws_cost_anomalies.nlq.tools._execute_cost_explorer",
+            "aws_cost_anomalies.agent.tools._execute_cost_explorer",
             side_effect=_mock_aws_tool,
         ),
         patch(
-            "aws_cost_anomalies.nlq.tools._execute_cloudwatch",
+            "aws_cost_anomalies.agent.tools._execute_cloudwatch",
             side_effect=_mock_aws_tool,
         ),
         patch(
-            "aws_cost_anomalies.nlq.tools._execute_budget_info",
+            "aws_cost_anomalies.agent.tools._execute_budget_info",
             side_effect=_mock_aws_tool,
         ),
         patch(
-            "aws_cost_anomalies.nlq.tools._execute_organization_info",
+            "aws_cost_anomalies.agent.tools._execute_organization_info",
             side_effect=_mock_aws_tool,
         ),
     ):

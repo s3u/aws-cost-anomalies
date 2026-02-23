@@ -43,5 +43,5 @@ select = ["E", "F", "I", "W"]
 testpaths = ["tests"]
 addopts = "-m 'not evals'"
 markers = [
-    "evals: NLQ agent evals (require Bedrock credentials, call real AWS APIs)",
+    "evals: agent evals (require Bedrock credentials, call real AWS APIs)",
 ]

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from botocore.exceptions import ClientError, NoCredentialsError
 
-from aws_cost_anomalies.nlq.bedrock_client import (
+from aws_cost_anomalies.agent.bedrock_client import (
     BedrockClient,
     BedrockError,
 )
@@ -21,7 +21,7 @@ def _client_error(code: str, message: str = "error") -> ClientError:
 
 
 class TestBedrockClientInit:
-    @patch("aws_cost_anomalies.nlq.bedrock_client.boto3.client")
+    @patch("aws_cost_anomalies.agent.bedrock_client.boto3.client")
     def test_creates_client(self, mock_boto_client):
         client = BedrockClient(region="us-west-2")
         mock_boto_client.assert_called_once_with(
@@ -30,7 +30,7 @@ class TestBedrockClientInit:
         assert client.client is mock_boto_client.return_value
 
     @patch(
-        "aws_cost_anomalies.nlq.bedrock_client.boto3.client",
+        "aws_cost_anomalies.agent.bedrock_client.boto3.client",
         side_effect=NoCredentialsError(),
     )
     def test_missing_credentials(self, _):
@@ -39,7 +39,7 @@ class TestBedrockClientInit:
 
 
 class TestConverse:
-    @patch("aws_cost_anomalies.nlq.bedrock_client.boto3.client")
+    @patch("aws_cost_anomalies.agent.bedrock_client.boto3.client")
     def test_basic_converse(self, mock_boto_client):
         mock_runtime = MagicMock()
         mock_runtime.converse.return_value = {
@@ -71,7 +71,7 @@ class TestConverse:
         assert call_kwargs["modelId"] == "us.anthropic.claude-sonnet-4-20250514-v1:0"
         assert call_kwargs["inferenceConfig"] == {"maxTokens": 4096}
 
-    @patch("aws_cost_anomalies.nlq.bedrock_client.boto3.client")
+    @patch("aws_cost_anomalies.agent.bedrock_client.boto3.client")
     def test_with_system_and_tools(self, mock_boto_client):
         mock_runtime = MagicMock()
         mock_runtime.converse.return_value = {"stopReason": "end_turn", "output": {"message": {}}}
@@ -93,7 +93,7 @@ class TestConverse:
         assert call_kwargs["toolConfig"] == tool_config
         assert call_kwargs["inferenceConfig"] == {"maxTokens": 2048}
 
-    @patch("aws_cost_anomalies.nlq.bedrock_client.boto3.client")
+    @patch("aws_cost_anomalies.agent.bedrock_client.boto3.client")
     def test_access_denied(self, mock_boto_client):
         mock_runtime = MagicMock()
         mock_runtime.converse.side_effect = _client_error(
@@ -108,7 +108,7 @@ class TestConverse:
                 messages=[{"role": "user", "content": [{"text": "q"}]}],
             )
 
-    @patch("aws_cost_anomalies.nlq.bedrock_client.boto3.client")
+    @patch("aws_cost_anomalies.agent.bedrock_client.boto3.client")
     def test_model_not_found(self, mock_boto_client):
         mock_runtime = MagicMock()
         mock_runtime.converse.side_effect = _client_error(
@@ -123,7 +123,7 @@ class TestConverse:
                 messages=[{"role": "user", "content": [{"text": "q"}]}],
             )
 
-    @patch("aws_cost_anomalies.nlq.bedrock_client.boto3.client")
+    @patch("aws_cost_anomalies.agent.bedrock_client.boto3.client")
     def test_throttling(self, mock_boto_client):
         mock_runtime = MagicMock()
         mock_runtime.converse.side_effect = _client_error(
@@ -138,7 +138,7 @@ class TestConverse:
                 messages=[{"role": "user", "content": [{"text": "q"}]}],
             )
 
-    @patch("aws_cost_anomalies.nlq.bedrock_client.boto3.client")
+    @patch("aws_cost_anomalies.agent.bedrock_client.boto3.client")
     def test_quota_exceeded(self, mock_boto_client):
         mock_runtime = MagicMock()
         mock_runtime.converse.side_effect = _client_error(
@@ -153,7 +153,7 @@ class TestConverse:
                 messages=[{"role": "user", "content": [{"text": "q"}]}],
             )
 
-    @patch("aws_cost_anomalies.nlq.bedrock_client.boto3.client")
+    @patch("aws_cost_anomalies.agent.bedrock_client.boto3.client")
     def test_validation_error(self, mock_boto_client):
         mock_runtime = MagicMock()
         mock_runtime.converse.side_effect = _client_error(

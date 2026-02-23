@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import duckdb
 import pytest
 
-from aws_cost_anomalies.nlq.tools import (
+from aws_cost_anomalies.agent.tools import (
     TOOL_DEFINITIONS,
     ToolContext,
     execute_tool,
@@ -128,7 +128,7 @@ class TestQueryCostDatabase:
 
 
 class TestCostExplorer:
-    @patch("aws_cost_anomalies.nlq.tools.boto3.client")
+    @patch("aws_cost_anomalies.agent.tools.boto3.client")
     def test_basic_cost_query(self, mock_boto_client, context):
         mock_ce = MagicMock()
         mock_ce.get_cost_and_usage.return_value = {
@@ -167,7 +167,7 @@ class TestCostExplorer:
         assert len(result["results"]) == 1
         assert result["results"][0]["total_unblended_cost"] == "1234.56"
 
-    @patch("aws_cost_anomalies.nlq.tools.boto3.client")
+    @patch("aws_cost_anomalies.agent.tools.boto3.client")
     def test_grouped_results(self, mock_boto_client, context):
         mock_ce = MagicMock()
         mock_ce.get_cost_and_usage.return_value = {
@@ -216,7 +216,7 @@ class TestCostExplorer:
 
 
 class TestCloudWatch:
-    @patch("aws_cost_anomalies.nlq.tools.boto3.client")
+    @patch("aws_cost_anomalies.agent.tools.boto3.client")
     def test_describe_alarms(self, mock_boto_client, context):
         mock_cw = MagicMock()
         mock_cw.describe_alarms.return_value = {
@@ -242,7 +242,7 @@ class TestCloudWatch:
         assert result["count"] == 1
         assert result["alarms"][0]["name"] == "HighBilling"
 
-    @patch("aws_cost_anomalies.nlq.tools.boto3.client")
+    @patch("aws_cost_anomalies.agent.tools.boto3.client")
     def test_unknown_action(self, mock_boto_client, context):
         mock_boto_client.return_value = MagicMock()
         result = execute_tool(
@@ -254,7 +254,7 @@ class TestCloudWatch:
 
 
 class TestBudgetInfo:
-    @patch("aws_cost_anomalies.nlq.tools.boto3.client")
+    @patch("aws_cost_anomalies.agent.tools.boto3.client")
     def test_describe_budgets(self, mock_boto_client, context):
         mock_sts = MagicMock()
         mock_sts.get_caller_identity.return_value = {
@@ -297,7 +297,7 @@ class TestBudgetInfo:
 
 
 class TestOrganizationInfo:
-    @patch("aws_cost_anomalies.nlq.tools.boto3.client")
+    @patch("aws_cost_anomalies.agent.tools.boto3.client")
     def test_list_accounts(self, mock_boto_client, context):
         mock_org = MagicMock()
         paginator = MagicMock()
@@ -330,7 +330,7 @@ class TestOrganizationInfo:
         assert result["count"] == 2
         assert result["accounts"][0]["name"] == "Production"
 
-    @patch("aws_cost_anomalies.nlq.tools.boto3.client")
+    @patch("aws_cost_anomalies.agent.tools.boto3.client")
     def test_describe_single_account(self, mock_boto_client, context):
         mock_org = MagicMock()
         mock_org.describe_account.return_value = {

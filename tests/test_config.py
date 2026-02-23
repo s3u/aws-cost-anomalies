@@ -91,7 +91,7 @@ def test_default_settings():
     assert settings.s3.region == "us-east-1"
     assert settings.database.path == "./data/costs.duckdb"
     assert settings.anomaly.rolling_window_days == 14
-    assert settings.nlq.max_tokens == 4096
-    assert settings.nlq.region == "us-east-1"
-    assert settings.nlq.max_agent_iterations == 10
-    assert "claude-sonnet-4" in settings.nlq.model
+    assert settings.agent.max_tokens == 4096
+    assert settings.agent.region == "us-east-1"
+    assert settings.agent.max_agent_iterations == 10
+    assert "claude-sonnet-4" in settings.agent.model

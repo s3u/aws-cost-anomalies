@@ -1,4 +1,4 @@
-"""System prompts and schema description for the NLQ agent."""
+"""System prompts and schema description for the agent."""
 
 SCHEMA_DESCRIPTION = """
 You have access to a DuckDB database with the following tables:

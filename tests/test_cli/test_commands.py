@@ -167,7 +167,7 @@ class TestQueryCommand:
 
     @patch("aws_cost_anomalies.cli.query.run_agent")
     def test_successful_query(self, mock_run_agent):
-        from aws_cost_anomalies.nlq.agent import AgentResponse
+        from aws_cost_anomalies.agent import AgentResponse
 
         mock_run_agent.return_value = AgentResponse(
             answer="EC2 costs $1,500.",
@@ -196,7 +196,7 @@ class TestQueryCommand:
 
     @patch("aws_cost_anomalies.cli.query.run_agent")
     def test_agent_error_displayed(self, mock_run_agent):
-        from aws_cost_anomalies.nlq.agent import AgentError
+        from aws_cost_anomalies.agent import AgentError
 
         mock_run_agent.side_effect = AgentError(
             "AWS credentials not found."

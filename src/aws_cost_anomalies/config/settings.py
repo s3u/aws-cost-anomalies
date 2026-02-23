@@ -48,7 +48,7 @@ class MCPServerConfigEntry:
 
 
 @dataclass
-class NlqConfig:
+class AgentConfig:
     model: str = "us.anthropic.claude-sonnet-4-20250514-v1:0"
     max_tokens: int = 4096
     region: str = "us-east-1"
@@ -65,7 +65,7 @@ class Settings:
     anomaly: AnomalyConfig = field(
         default_factory=AnomalyConfig
     )
-    nlq: NlqConfig = field(default_factory=NlqConfig)
+    agent: AgentConfig = field(default_factory=AgentConfig)
 
 
 def _safe_int(value, name: str, default: int) -> int:
@@ -178,17 +178,17 @@ def load_settings(
         ),
     )
 
-    nlq_raw = raw.get("nlq", {})
+    agent_raw = raw.get("agent", {})
 
     mcp_servers: list[MCPServerConfigEntry] = []
-    for entry in nlq_raw.get("mcp_servers", []):
+    for entry in agent_raw.get("mcp_servers", []):
         if not isinstance(entry, dict):
-            raise ConfigError("Each nlq.mcp_servers entry must be a mapping")
+            raise ConfigError("Each agent.mcp_servers entry must be a mapping")
         name = entry.get("name")
         command = entry.get("command")
         if not name or not command:
             raise ConfigError(
-                "Each nlq.mcp_servers entry requires 'name' and 'command'"
+                "Each agent.mcp_servers entry requires 'name' and 'command'"
             )
         mcp_servers.append(
             MCPServerConfigEntry(
@@ -200,28 +200,28 @@ def load_settings(
             )
         )
 
-    nlq = NlqConfig(
+    agent_cfg = AgentConfig(
         model=str(
-            nlq_raw.get(
+            agent_raw.get(
                 "model",
                 "us.anthropic.claude-sonnet-4-20250514-v1:0",
             )
         ),
         max_tokens=_safe_int(
-            nlq_raw.get("max_tokens", 4096),
-            "nlq.max_tokens",
+            agent_raw.get("max_tokens", 4096),
+            "agent.max_tokens",
             4096,
         ),
         region=os.environ.get(
             "AWS_BEDROCK_REGION",
-            str(nlq_raw.get("region", "us-east-1")),
+            str(agent_raw.get("region", "us-east-1")),
         ),
         max_agent_iterations=_safe_int(
-            nlq_raw.get("max_agent_iterations", 10),
-            "nlq.max_agent_iterations",
+            agent_raw.get("max_agent_iterations", 10),
+            "agent.max_agent_iterations",
             10,
         ),
         mcp_servers=mcp_servers,
     )
 
-    return Settings(s3=s3, database=db, anomaly=anomaly, nlq=nlq)
+    return Settings(s3=s3, database=db, anomaly=anomaly, agent=agent_cfg)

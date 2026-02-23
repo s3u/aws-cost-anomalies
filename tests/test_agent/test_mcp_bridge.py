@@ -7,13 +7,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aws_cost_anomalies.config.settings import load_settings
-from aws_cost_anomalies.nlq.mcp_bridge import (
+from aws_cost_anomalies.agent.mcp_bridge import (
     MCPBridge,
     _convert_call_result,
     _mcp_tool_to_bedrock_spec,
     _ServerHandle,
 )
+from aws_cost_anomalies.config.settings import load_settings
 
 # ------------------------------------------------------------------
 # Fake MCP types for testing without a real server
@@ -208,7 +208,7 @@ class TestMCPConfigParsing:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             """
-nlq:
+agent:
   mcp_servers:
     - name: "cloudtrail"
       command: "uvx"
@@ -222,8 +222,8 @@ nlq:
         )
         settings = load_settings(str(config_file))
 
-        assert len(settings.nlq.mcp_servers) == 1
-        srv = settings.nlq.mcp_servers[0]
+        assert len(settings.agent.mcp_servers) == 1
+        srv = settings.agent.mcp_servers[0]
         assert srv.name == "cloudtrail"
         assert srv.command == "uvx"
         assert srv.args == ["awslabs.cloudtrail-mcp-server@latest"]
@@ -232,9 +232,9 @@ nlq:
 
     def test_parse_no_mcp_servers(self, tmp_path):
         config_file = tmp_path / "config.yaml"
-        config_file.write_text("nlq:\n  max_tokens: 2048\n")
+        config_file.write_text("agent:\n  max_tokens: 2048\n")
         settings = load_settings(str(config_file))
-        assert settings.nlq.mcp_servers == []
+        assert settings.agent.mcp_servers == []
 
     def test_mcp_server_missing_name_raises(self, tmp_path):
         from aws_cost_anomalies.config.settings import ConfigError
@@ -242,7 +242,7 @@ nlq:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             """
-nlq:
+agent:
   mcp_servers:
     - command: "uvx"
 """
@@ -256,7 +256,7 @@ nlq:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             """
-nlq:
+agent:
   mcp_servers:
     - name: "test"
 """
@@ -268,7 +268,7 @@ nlq:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             """
-nlq:
+agent:
   mcp_servers:
     - name: "cloudtrail"
       command: "uvx"
@@ -279,9 +279,9 @@ nlq:
 """
         )
         settings = load_settings(str(config_file))
-        assert len(settings.nlq.mcp_servers) == 2
-        assert settings.nlq.mcp_servers[0].name == "cloudtrail"
-        assert settings.nlq.mcp_servers[1].name == "iam"
+        assert len(settings.agent.mcp_servers) == 2
+        assert settings.agent.mcp_servers[0].name == "cloudtrail"
+        assert settings.agent.mcp_servers[1].name == "iam"
 
 
 # ------------------------------------------------------------------
@@ -312,7 +312,7 @@ class TestExecuteToolMCPRouting:
         """execute_tool dispatches to mcp_bridge for MCP tools."""
         import duckdb
 
-        from aws_cost_anomalies.nlq.tools import ToolContext, execute_tool
+        from aws_cost_anomalies.agent.tools import ToolContext, execute_tool
         from aws_cost_anomalies.storage.schema import create_tables
 
         conn = duckdb.connect(":memory:")
@@ -338,7 +338,7 @@ class TestExecuteToolMCPRouting:
         """Built-in tools are dispatched even if bridge is provided."""
         import duckdb
 
-        from aws_cost_anomalies.nlq.tools import ToolContext, execute_tool
+        from aws_cost_anomalies.agent.tools import ToolContext, execute_tool
         from aws_cost_anomalies.storage.schema import create_tables
 
         conn = duckdb.connect(":memory:")

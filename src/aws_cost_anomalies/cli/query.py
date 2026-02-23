@@ -9,13 +9,13 @@ import typer
 from rich.console import Console
 from rich.syntax import Syntax
 
-from aws_cost_anomalies.cli.app import app
-from aws_cost_anomalies.config.settings import load_settings
-from aws_cost_anomalies.nlq.agent import (
+from aws_cost_anomalies.agent import (
     AgentError,
     AgentStep,
     run_agent,
 )
+from aws_cost_anomalies.cli.app import app
+from aws_cost_anomalies.config.settings import load_settings
 from aws_cost_anomalies.storage.database import get_connection
 from aws_cost_anomalies.storage.schema import create_tables
 
@@ -135,16 +135,16 @@ def query(
         )
         raise typer.Exit(1)
 
-    model = settings.nlq.model
-    region = settings.nlq.region
-    max_tokens = settings.nlq.max_tokens
-    max_iterations = settings.nlq.max_agent_iterations
+    model = settings.agent.model
+    region = settings.agent.region
+    max_tokens = settings.agent.max_tokens
+    max_iterations = settings.agent.max_agent_iterations
 
     # Set up MCP bridge if servers are configured
     bridge = None
-    if settings.nlq.mcp_servers:
+    if settings.agent.mcp_servers:
         try:
-            from aws_cost_anomalies.nlq.mcp_bridge import MCPBridge
+            from aws_cost_anomalies.agent.mcp_bridge import MCPBridge
         except ImportError:
             console.print(
                 "[yellow]MCP servers configured but 'mcp' package "
@@ -153,12 +153,12 @@ def query(
             )
             raise typer.Exit(1)
 
-        bridge = MCPBridge(settings.nlq.mcp_servers)
+        bridge = MCPBridge(settings.agent.mcp_servers)
         try:
             tool_count = bridge.connect()
             console.print(
                 f"[dim]MCP: {tool_count} tools from "
-                f"{len(settings.nlq.mcp_servers)} server(s)[/dim]"
+                f"{len(settings.agent.mcp_servers)} server(s)[/dim]"
             )
         except Exception as e:
             console.print(f"[yellow]MCP connection error: {e}[/yellow]")

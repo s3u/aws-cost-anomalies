@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from aws_cost_anomalies.nlq.executor import UnsafeSQLError, execute_query, validate_sql
+from aws_cost_anomalies.agent.executor import UnsafeSQLError, execute_query, validate_sql
 
 
 class TestValidateSQL:

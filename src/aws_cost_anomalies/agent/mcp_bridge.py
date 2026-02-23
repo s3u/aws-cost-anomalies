@@ -1,4 +1,4 @@
-"""Bridge between the sync NLQ agent loop and async MCP servers."""
+"""Bridge between the sync agent loop and async MCP servers."""
 
 from __future__ import annotations
 

@@ -8,7 +8,7 @@ Detect cost anomalies across your AWS root and linked accounts. Ingests Cost and
 - **Trend Analysis** — Daily cost trends grouped by service, account, or region with day-over-day changes
 - **Anomaly Detection** — Z-score based detection with configurable sensitivity and rolling windows
 - **Natural Language Queries** — Ask questions about your costs in plain English via an agentic system that uses DuckDB, Cost Explorer, CloudWatch, Budgets, and Organizations
-- **MCP Server Support** — Extend the NLQ agent with any [Model Context Protocol](https://modelcontextprotocol.io/) server (e.g. CloudTrail for "who launched that instance?")
+- **MCP Server Support** — Extend the agent with any [Model Context Protocol](https://modelcontextprotocol.io/) server (e.g. CloudTrail for "who launched that instance?")
 
 ## Prerequisites
 
@@ -68,7 +68,7 @@ anomaly:
   z_score_threshold: 2.5          # Default z-score threshold (overridden by --sensitivity)
   min_daily_cost: 1.0             # Ignore groups with daily cost below this
 
-nlq:
+agent:
   model: us.anthropic.claude-sonnet-4-20250514-v1:0  # Bedrock model ID
   max_tokens: 4096
   region: us-east-1               # Bedrock region
@@ -88,7 +88,7 @@ nlq:
 |----------|-----------|
 | `AWS_COST_DB_PATH` | `database.path` |
 | `AWS_COST_CACHE_DIR` | `database.cache_dir` |
-| `AWS_BEDROCK_REGION` | `nlq.region` (Bedrock region) |
+| `AWS_BEDROCK_REGION` | `agent.region` (Bedrock region) |
 
 An `.env.example` file is provided as a template.
 
@@ -166,7 +166,7 @@ To extend the agent with external tools (e.g. CloudTrail), install the MCP extra
 uv sync --extra mcp    # or: pip install "aws-cost-anomalies[mcp]"
 ```
 
-Then add `mcp_servers` entries under `nlq` in `config.yaml` (see [Configuration](#configuration) above). The agent will automatically discover MCP tools at startup and use them when relevant.
+Then add `mcp_servers` entries under `agent` in `config.yaml` (see [Configuration](#configuration) above). The agent will automatically discover MCP tools at startup and use them when relevant.
 
 ## How It Works
 
@@ -216,7 +216,7 @@ uv run ruff check --fix src/ tests/
 
 ### Agent Correctness Evals
 
-The project includes 10 correctness evals that run the NLQ agent against a deterministic DuckDB fixture and assert the answers are **numerically correct** — not just keyword matches. These require live AWS Bedrock credentials.
+The project includes 10 correctness evals that run the agent against a deterministic DuckDB fixture and assert the answers are **numerically correct** — not just keyword matches. These require live AWS Bedrock credentials.
 
 ```bash
 # Run evals (requires Bedrock credentials)
@@ -249,7 +249,7 @@ src/aws_cost_anomalies/
 ├── ingestion/     # S3 client, manifest parser, parquet loader
 ├── storage/       # DuckDB connection + schema management
 ├── analysis/      # Trend aggregation + anomaly detection
-├── nlq/           # Bedrock-powered agentic NLQ system
+├── agent/         # Bedrock-powered agentic system
 └── utils/         # Date helpers
 ```
 

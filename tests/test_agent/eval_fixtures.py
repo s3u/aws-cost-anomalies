@@ -1,4 +1,4 @@
-"""Shared fixtures and helpers for NLQ agent evals.
+"""Shared fixtures and helpers for agent evals.
 
 Provides an in-memory DuckDB loaded with deterministic cost data
 (30 days × 3 accounts × 5 services × 2 regions) and pre-computed
@@ -13,7 +13,7 @@ from datetime import date, timedelta
 import duckdb
 import pytest
 
-from aws_cost_anomalies.nlq.agent import AgentResponse
+from aws_cost_anomalies.agent import AgentResponse
 from aws_cost_anomalies.storage.database import get_connection
 from aws_cost_anomalies.storage.schema import create_tables
 

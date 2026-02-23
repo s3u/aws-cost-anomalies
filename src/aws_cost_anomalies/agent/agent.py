@@ -1,4 +1,4 @@
-"""Agentic NLQ loop — Bedrock Converse with tool dispatch."""
+"""Agentic loop — Bedrock Converse with tool dispatch."""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ from typing import TYPE_CHECKING, Callable
 import duckdb
 
 if TYPE_CHECKING:
-    from aws_cost_anomalies.nlq.mcp_bridge import MCPBridge
+    from aws_cost_anomalies.agent.mcp_bridge import MCPBridge
 
-from aws_cost_anomalies.nlq.bedrock_client import (
+from aws_cost_anomalies.agent.bedrock_client import (
     BedrockClient,
     BedrockError,
 )
-from aws_cost_anomalies.nlq.prompts import AGENT_SYSTEM_PROMPT
-from aws_cost_anomalies.nlq.tools import (
+from aws_cost_anomalies.agent.prompts import AGENT_SYSTEM_PROMPT
+from aws_cost_anomalies.agent.tools import (
     TOOL_DEFINITIONS,
     ToolContext,
     execute_tool,
@@ -59,7 +59,7 @@ def run_agent(
     history: list[dict] | None = None,
     mcp_bridge: MCPBridge | None = None,
 ) -> AgentResponse:
-    """Run the agentic NLQ loop.
+    """Run the agentic loop.
 
     Sends the user question to Bedrock, executes tool calls in a
     loop, and returns the final text answer.
