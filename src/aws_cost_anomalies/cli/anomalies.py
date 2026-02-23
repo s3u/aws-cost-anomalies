@@ -63,6 +63,11 @@ def anomalies(
         "--drift-threshold",
         help="Drift threshold in percent (default: from config, or 20)",
     ),
+    source: str = typer.Option(
+        "all",
+        "--source",
+        help="Data source filter: cur, cost-explorer, or all",
+    ),
 ) -> None:
     """Detect cost anomalies using z-score analysis."""
     settings = load_settings(config)
@@ -87,9 +92,17 @@ def anomalies(
     if not _check_has_data(conn):
         console.print(
             "[yellow]No cost data found.[/yellow] "
-            "Run [bold]ingest[/bold] first to load CUR data."
+            "Run [bold]ingest[/bold] first to load cost data."
         )
         raise typer.Exit(1)
+
+    source_map = {"cur": "cur", "cost-explorer": "cost_explorer", "all": None}
+    if source not in source_map:
+        console.print(
+            "[red]Error:[/red] --source must be one of: cur, cost-explorer, all"
+        )
+        raise typer.Exit(1)
+    data_source = source_map[source]
 
     columns = GROUP_BY_MAP[group_by]
     min_cost = settings.anomaly.min_daily_cost
@@ -104,6 +117,7 @@ def anomalies(
         sensitivity=sensitivity,
         min_daily_cost=min_cost,
         drift_threshold=effective_drift / 100,
+        data_source=data_source,
     )
 
     print_anomalies_table(results)

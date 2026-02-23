@@ -1,10 +1,12 @@
-"""Ingest command — download CUR data from S3 and load into DuckDB."""
+"""Ingest command — download CUR data from S3 or Cost Explorer into DuckDB."""
 
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
 from typing import Optional
 
+import duckdb
 import typer
 from rich.console import Console
 from rich.progress import (
@@ -16,22 +18,9 @@ from rich.progress import (
 )
 
 from aws_cost_anomalies.cli.app import app
-from aws_cost_anomalies.config.settings import load_settings
-from aws_cost_anomalies.ingestion.loader import (
-    delete_billing_period_data,
-    get_ingested_assemblies,
-    load_parquet_file,
-    record_ingestion,
-)
-from aws_cost_anomalies.ingestion.s3_client import (
-    CURBrowser,
-    S3Error,
-)
+from aws_cost_anomalies.config.settings import Settings, load_settings
 from aws_cost_anomalies.storage.database import get_connection
-from aws_cost_anomalies.storage.schema import (
-    create_tables,
-    rebuild_daily_summary,
-)
+from aws_cost_anomalies.storage.schema import create_tables
 
 console = Console()
 
@@ -58,24 +47,24 @@ def _parse_date_option(date_str: str) -> str:
     return f"{year}{month:02d}01-{end_year}{end_month:02d}01"
 
 
-@app.command()
-def ingest(
-    config: Optional[str] = typer.Option(
-        None, "--config", help="Path to config YAML file"
-    ),
-    date: Optional[str] = typer.Option(
-        None,
-        "--date",
-        help="Specific month to ingest (YYYY-MM, e.g. 2025-01)",
-    ),
-    full_refresh: bool = typer.Option(
-        False,
-        "--full-refresh",
-        help="Re-ingest all billing periods",
-    ),
+def _ingest_cur(
+    settings: Settings,
+    conn: duckdb.DuckDBPyConnection,
+    date_opt: str | None,
+    full_refresh: bool,
 ) -> None:
-    """Download CUR data from S3 and load into DuckDB."""
-    settings = load_settings(config)
+    """Run the CUR ingestion pipeline from S3."""
+    from aws_cost_anomalies.ingestion.loader import (
+        delete_billing_period_data,
+        get_ingested_assemblies,
+        load_parquet_file,
+        record_ingestion,
+    )
+    from aws_cost_anomalies.ingestion.s3_client import (
+        CURBrowser,
+        S3Error,
+    )
+    from aws_cost_anomalies.storage.schema import rebuild_daily_summary
 
     if not settings.s3.bucket or not settings.s3.report_name:
         console.print(
@@ -84,9 +73,6 @@ def ingest(
             "Set them in config.yaml or see config.example.yaml."
         )
         raise typer.Exit(1)
-
-    conn = get_connection(settings.database.path)
-    create_tables(conn)
 
     try:
         browser = CURBrowser(
@@ -118,8 +104,8 @@ def ingest(
             "Listing billing periods...", total=None
         )
         try:
-            if date:
-                bp = _parse_date_option(date)
+            if date_opt:
+                bp = _parse_date_option(date_opt)
                 periods = [bp]
             else:
                 periods = browser.list_billing_periods()
@@ -233,3 +219,136 @@ def ingest(
         console.print(
             f"[dim]{skipped} period(s) already up to date.[/dim]"
         )
+
+
+def _ingest_cost_explorer(
+    settings: Settings,
+    conn: duckdb.DuckDBPyConnection,
+    lookback_days: int,
+) -> None:
+    """Fetch Cost Explorer data and load into DuckDB."""
+    from aws_cost_anomalies.ingestion.cost_explorer import (
+        CostExplorerError,
+        fetch_cost_explorer_data,
+    )
+    from aws_cost_anomalies.storage.schema import (
+        insert_cost_explorer_summary,
+    )
+
+    end_date = date.today()
+    start_date = end_date - timedelta(days=lookback_days)
+
+    spinner = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    )
+
+    def on_page(page_num: int, rows_so_far: int) -> None:
+        spinner.update(
+            task,
+            description=(
+                f"Fetching Cost Explorer data... "
+                f"page {page_num}, {rows_so_far} rows"
+            ),
+        )
+
+    with spinner:
+        task = spinner.add_task(
+            "Fetching Cost Explorer data...", total=None
+        )
+        try:
+            rows = fetch_cost_explorer_data(
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                region=settings.cost_explorer.region,
+                on_page=on_page,
+            )
+        except CostExplorerError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(1)
+
+        spinner.update(
+            task,
+            description=f"Fetched {len(rows)} rows from Cost Explorer",
+        )
+
+    # Transform and insert
+    tuples = [
+        (
+            r.usage_date,
+            r.usage_account_id,
+            r.product_code,
+            "",  # region — CE 2-dim GroupBy limit
+            r.total_unblended_cost,
+            r.total_blended_cost,
+            0.0,  # usage_amount
+            0,  # line_item_count
+        )
+        for r in rows
+    ]
+    inserted = insert_cost_explorer_summary(conn, tuples)
+
+    console.print(
+        f"\n[green]Cost Explorer ingestion complete.[/green] "
+        f"{inserted:,} rows loaded "
+        f"({start_date} to {end_date})."
+    )
+
+
+@app.command()
+def ingest(
+    config: Optional[str] = typer.Option(
+        None, "--config", help="Path to config YAML file"
+    ),
+    source: str = typer.Option(
+        "cur",
+        "--source",
+        help="Data source: 'cur' (S3) or 'cost-explorer' (API)",
+    ),
+    date: Optional[str] = typer.Option(
+        None,
+        "--date",
+        help="Specific month to ingest (YYYY-MM, e.g. 2025-01). CUR only.",
+    ),
+    days: Optional[int] = typer.Option(
+        None,
+        "--days",
+        help="Lookback days for Cost Explorer (overrides config). CE only.",
+    ),
+    full_refresh: bool = typer.Option(
+        False,
+        "--full-refresh",
+        help="Re-ingest all billing periods. CUR only.",
+    ),
+) -> None:
+    """Download cost data from S3 (CUR) or Cost Explorer and load into DuckDB."""
+    settings = load_settings(config)
+    conn = get_connection(settings.database.path)
+    create_tables(conn)
+
+    if source == "cur":
+        if days is not None:
+            console.print(
+                "[yellow]Warning:[/yellow] --days is ignored "
+                "for --source cur. Use --date YYYY-MM instead."
+            )
+        _ingest_cur(settings, conn, date, full_refresh)
+    elif source == "cost-explorer":
+        if date is not None:
+            console.print(
+                "[yellow]Warning:[/yellow] --date is ignored "
+                "for --source cost-explorer. Use --days instead."
+            )
+        if full_refresh:
+            console.print(
+                "[yellow]Warning:[/yellow] --full-refresh is "
+                "ignored for --source cost-explorer."
+            )
+        lookback = days if days is not None else settings.cost_explorer.lookback_days
+        _ingest_cost_explorer(settings, conn, lookback)
+    else:
+        console.print(
+            "[red]Error:[/red] --source must be 'cur' or 'cost-explorer'"
+        )
+        raise typer.Exit(1)

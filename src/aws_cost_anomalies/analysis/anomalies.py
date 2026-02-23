@@ -77,6 +77,7 @@ def detect_anomalies(
     sensitivity: str = "medium",
     min_daily_cost: float = 1.0,
     drift_threshold: float = 0.20,
+    data_source: str | None = None,
 ) -> list[Anomaly]:
     """Detect cost anomalies using robust statistics over a rolling window.
 
@@ -90,6 +91,7 @@ def detect_anomalies(
         sensitivity: "low" (z>3), "medium" (z>2.5), "high" (z>2)
         min_daily_cost: Minimum daily cost to consider
         drift_threshold: Fractional drift over window to flag (0.20 = 20%)
+        data_source: Filter by data source ('cur' or 'cost_explorer'). None = all.
 
     Returns list of detected anomalies, sorted by |z_score| descending.
     """
@@ -112,15 +114,21 @@ def detect_anomalies(
     group_clause = ", ".join(group_cols)
     group_by_label = "+".join(group_cols)
 
+    source_filter = ""
+    params: list = [cutoff]
+    if data_source:
+        source_filter = " AND data_source = ?"
+        params.append(data_source)
+
     rows = conn.execute(
         f"""
         SELECT {select_cols}, usage_date, SUM(total_unblended_cost) AS daily_cost
         FROM daily_cost_summary
-        WHERE usage_date >= ?
+        WHERE usage_date >= ?{source_filter}
         GROUP BY {group_clause}, usage_date
         ORDER BY {group_clause}, usage_date
         """,
-        [cutoff],
+        params,
     ).fetchall()
 
     # Organize by group

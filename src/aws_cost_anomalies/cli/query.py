@@ -15,52 +15,79 @@ from aws_cost_anomalies.agent import (
     run_agent,
 )
 from aws_cost_anomalies.cli.app import app
-from aws_cost_anomalies.config.settings import load_settings
+from aws_cost_anomalies.config.settings import Settings, load_settings
 from aws_cost_anomalies.storage.database import get_connection
 from aws_cost_anomalies.storage.schema import create_tables
 
 console = Console()
 
+# Human-readable labels for tool progress messages.
+_TOOL_LABELS: dict[str, str] = {
+    "query_cost_database": "Querying cost database",
+    "get_cost_explorer_data": "Fetching Cost Explorer data",
+    "get_cloudwatch_metrics": "Checking CloudWatch metrics",
+    "get_budget_info": "Retrieving budget info",
+    "get_organization_info": "Looking up organization accounts",
+    "ingest_cost_explorer_data": "Importing Cost Explorer data",
+    "ingest_cur_data": "Importing CUR data from S3",
+}
 
-def _check_has_data(conn) -> bool:
-    """Check if the database has any cost data."""
-    result = conn.execute(
-        "SELECT COUNT(*) FROM daily_cost_summary"
-    ).fetchone()
-    return result[0] > 0 if result else False
 
+def _make_step_callback(verbose: bool):
+    """Create an on_step callback.
 
-def _on_agent_step(step: AgentStep) -> None:
-    """Display agent tool calls inline as they happen."""
-    console.print(
-        f"\n[bold blue]Using tool:[/bold blue] {step.tool_name}"
-    )
+    Always shows brief progress (tool name) before execution.
+    In verbose mode, also shows tool input and result details.
 
-    # Show tool input
-    if step.tool_name == "query_cost_database":
-        sql = step.tool_input.get("sql", "")
-        if sql:
-            console.print(Syntax(sql, "sql", theme="monokai"))
-    else:
-        input_str = json.dumps(step.tool_input, indent=2)
-        console.print(f"[dim]{input_str}[/dim]")
+    on_step is called twice per tool:
+      1. Before execution (step.tool_result is None)
+      2. After execution (step.tool_result is set)
+    """
 
-    # Show result preview
-    if step.tool_result:
-        if "error" in step.tool_result:
-            console.print(
-                f"[red]Tool error:[/red] "
-                f"{step.tool_result['error']}"
+    def _on_step(step: AgentStep) -> None:
+        if step.tool_result is None:
+            # --- Pre-execution: show what tool is running ---
+            label = _TOOL_LABELS.get(
+                step.tool_name, f"Using {step.tool_name}"
             )
-        elif step.tool_name == "query_cost_database":
-            count = step.tool_result.get("row_count", 0)
-            console.print(f"[dim]{count} rows returned[/dim]")
+            console.print(f"\n[bold blue]{label}...[/bold blue]")
+
+            # In verbose mode, also show input details
+            if verbose:
+                if step.tool_name == "query_cost_database":
+                    sql = step.tool_input.get("sql", "")
+                    if sql:
+                        console.print(Syntax(sql, "sql", theme="monokai"))
+                else:
+                    input_str = json.dumps(step.tool_input, indent=2)
+                    console.print(f"[dim]{input_str}[/dim]")
         else:
-            preview = json.dumps(step.tool_result, indent=2)
-            # Truncate long previews
-            if len(preview) > 500:
-                preview = preview[:500] + "\n..."
-            console.print(f"[dim]{preview}[/dim]")
+            # --- Post-execution: show result summary ---
+            if "error" in step.tool_result:
+                console.print(
+                    f"[red]Error:[/red] "
+                    f"{step.tool_result['error']}"
+                )
+            elif step.tool_name == "query_cost_database":
+                count = step.tool_result.get("row_count", 0)
+                console.print(f"[dim]{count} rows returned[/dim]")
+            elif step.tool_name in (
+                "ingest_cost_explorer_data",
+                "ingest_cur_data",
+            ):
+                rows = step.tool_result.get("rows_loaded", 0)
+                source = step.tool_result.get("source", "")
+                console.print(
+                    f"[green]{rows:,} rows loaded[/green]"
+                    f"[dim] (source: {source})[/dim]"
+                )
+            elif verbose:
+                preview = json.dumps(step.tool_result, indent=2)
+                if len(preview) > 500:
+                    preview = preview[:500] + "\n..."
+                console.print(f"[dim]{preview}[/dim]")
+
+    return _on_step
 
 
 def _run_question(
@@ -70,6 +97,7 @@ def _run_question(
     region: str,
     max_tokens: int,
     max_iterations: int,
+    settings: Settings,
     history: list[dict] | None = None,
     mcp_bridge=None,
     verbose: bool = False,
@@ -79,7 +107,7 @@ def _run_question(
     Returns the updated conversation messages for multi-turn
     context, or None on error.
     """
-    console.print(f"\n[dim]Thinking: {question}[/dim]")
+    console.print(f"\n[dim]Thinking...[/dim]")
     try:
         response = run_agent(
             question=question,
@@ -88,9 +116,10 @@ def _run_question(
             region=region,
             max_tokens=max_tokens,
             max_iterations=max_iterations,
-            on_step=_on_agent_step if verbose else None,
+            on_step=_make_step_callback(verbose),
             history=history,
             mcp_bridge=mcp_bridge,
+            settings=settings,
         )
     except AgentError as e:
         console.print(f"[red]Error:[/red] {e}")
@@ -135,13 +164,6 @@ def query(
     conn = get_connection(settings.database.path)
     create_tables(conn)
 
-    if not _check_has_data(conn):
-        console.print(
-            "[yellow]No cost data found.[/yellow] "
-            "Run [bold]ingest[/bold] first to load CUR data."
-        )
-        raise typer.Exit(1)
-
     model = settings.agent.model
     region = settings.agent.region
     max_tokens = settings.agent.max_tokens
@@ -176,12 +198,12 @@ def query(
             console.print("\n[bold]AWS Cost Query Agent[/bold]")
             console.print(
                 "Ask questions about your AWS costs in plain English. "
-                "The agent writes SQL against your CUR data, runs it, "
-                "and explains the results.\n"
+                "The agent can query local cost data, import from Cost "
+                "Explorer or CUR, and call AWS APIs.\n"
             )
             console.print("[dim]Example queries:[/dim]")
             console.print("[dim]  What are my top 5 most expensive services this month?[/dim]")
-            console.print("[dim]  Show me daily EC2 spend for the last 2 weeks[/dim]")
+            console.print("[dim]  Import Cost Explorer data for the last 30 days[/dim]")
             console.print("[dim]  Which accounts had the biggest cost increase?[/dim]")
             console.print("[dim]  Break down last week's spend by service and region[/dim]")
             console.print(
@@ -206,6 +228,7 @@ def query(
                 history = _run_question(
                     conn, q, model, region,
                     max_tokens, max_iterations,
+                    settings=settings,
                     history=history,
                     mcp_bridge=bridge,
                     verbose=verbose,
@@ -216,6 +239,7 @@ def query(
             _run_question(
                 conn, question, model, region,
                 max_tokens, max_iterations,
+                settings=settings,
                 mcp_bridge=bridge,
                 verbose=verbose,
             )

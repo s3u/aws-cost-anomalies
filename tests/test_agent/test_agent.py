@@ -24,12 +24,12 @@ def db_conn():
     conn.execute(
         "INSERT INTO daily_cost_summary VALUES "
         "('2025-01-15', '111111111111', 'AmazonEC2', "
-        "'us-east-1', 1500.50, 1400.00, 100, 50)"
+        "'us-east-1', 1500.50, 1400.00, 100, 50, 'cur')"
     )
     conn.execute(
         "INSERT INTO daily_cost_summary VALUES "
         "('2025-01-15', '111111111111', 'AmazonS3', "
-        "'us-east-1', 250.75, 240.00, 5000, 20)"
+        "'us-east-1', 250.75, 240.00, 5000, 20, 'cur')"
     )
     return conn
 
@@ -252,16 +252,19 @@ class TestOnStepCallback:
         ]
         MockClient.return_value = mock_client
 
-        steps_seen: list[AgentStep] = []
+        calls: list[tuple[str, bool]] = []
 
         def on_step(step: AgentStep):
-            steps_seen.append(step)
+            calls.append(
+                (step.tool_name, step.tool_result is not None)
+            )
 
         run_agent("test", db_conn, on_step=on_step)
 
-        assert len(steps_seen) == 1
-        assert steps_seen[0].tool_name == "query_cost_database"
-        assert steps_seen[0].tool_result is not None
+        # on_step is called twice per tool: before (result=None) and after
+        assert len(calls) == 2
+        assert calls[0] == ("query_cost_database", False)  # pre
+        assert calls[1] == ("query_cost_database", True)  # post
 
 
 class TestConversationMemory:

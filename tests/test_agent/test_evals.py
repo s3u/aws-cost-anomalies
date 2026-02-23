@@ -53,7 +53,7 @@ def _mock_aws_tool(tool_input: dict, context: object) -> dict:
 
 @pytest.fixture(autouse=True)
 def _patch_aws_tools():
-    """Prevent evals from calling real AWS APIs (Cost Explorer, etc.)."""
+    """Prevent evals from calling real AWS APIs (Cost Explorer, ingestion, etc.)."""
     with (
         patch(
             "aws_cost_anomalies.agent.tools._execute_cost_explorer",
@@ -69,6 +69,14 @@ def _patch_aws_tools():
         ),
         patch(
             "aws_cost_anomalies.agent.tools._execute_organization_info",
+            side_effect=_mock_aws_tool,
+        ),
+        patch(
+            "aws_cost_anomalies.agent.tools._execute_ingest_cost_explorer",
+            side_effect=_mock_aws_tool,
+        ),
+        patch(
+            "aws_cost_anomalies.agent.tools._execute_ingest_cur_data",
             side_effect=_mock_aws_tool,
         ),
     ):

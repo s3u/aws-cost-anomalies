@@ -132,7 +132,17 @@ class TestAnomaliesCommand:
 
 
 class TestQueryCommand:
-    def test_empty_db(self):
+    @patch("aws_cost_anomalies.cli.query.run_agent")
+    def test_empty_db_runs_agent(self, mock_run_agent):
+        """Empty DB no longer exits early -- agent handles it."""
+        from aws_cost_anomalies.agent import AgentResponse
+
+        mock_run_agent.return_value = AgentResponse(
+            answer="No data loaded yet.",
+            steps=[],
+            input_tokens=100,
+            output_tokens=50,
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = f"{tmpdir}/costs.duckdb"
             cfg = _make_config(tmpdir, db_path)
@@ -143,8 +153,8 @@ class TestQueryCommand:
                 app,
                 ["query", "--config", cfg, "top services"],
             )
-            assert result.exit_code == 1
-            assert "ingest" in result.output.lower()
+            assert result.exit_code == 0
+            mock_run_agent.assert_called_once()
 
     def test_no_question_no_interactive(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -152,12 +162,6 @@ class TestQueryCommand:
             cfg = _make_config(tmpdir, db_path)
             conn = get_connection(db_path)
             create_tables(conn)
-            # Insert dummy data so it doesn't exit early
-            conn.execute(
-                "INSERT INTO daily_cost_summary VALUES "
-                "('2025-01-01', '111', 'EC2', 'us-east-1', "
-                "100, 95, 10, 1)"
-            )
             conn.close()
             result = runner.invoke(
                 app, ["query", "--config", cfg]
@@ -180,11 +184,6 @@ class TestQueryCommand:
             cfg = _make_config(tmpdir, db_path)
             conn = get_connection(db_path)
             create_tables(conn)
-            conn.execute(
-                "INSERT INTO daily_cost_summary VALUES "
-                "('2025-01-01', '111', 'EC2', 'us-east-1', "
-                "100, 95, 10, 1)"
-            )
             conn.close()
             result = runner.invoke(
                 app,
@@ -206,11 +205,6 @@ class TestQueryCommand:
             cfg = _make_config(tmpdir, db_path)
             conn = get_connection(db_path)
             create_tables(conn)
-            conn.execute(
-                "INSERT INTO daily_cost_summary VALUES "
-                "('2025-01-01', '111', 'EC2', 'us-east-1', "
-                "100, 95, 10, 1)"
-            )
             conn.close()
             result = runner.invoke(
                 app,

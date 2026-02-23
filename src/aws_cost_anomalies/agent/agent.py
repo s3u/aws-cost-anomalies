@@ -9,6 +9,7 @@ import duckdb
 
 if TYPE_CHECKING:
     from aws_cost_anomalies.agent.mcp_bridge import MCPBridge
+    from aws_cost_anomalies.config.settings import Settings
 
 from aws_cost_anomalies.agent.bedrock_client import (
     BedrockClient,
@@ -55,9 +56,10 @@ def run_agent(
     region: str = "us-east-1",
     max_tokens: int = 4096,
     max_iterations: int = 10,
-    on_step: Callable[[AgentStep], None] | None = None,
+    on_step: Callable[[AgentStep], None] | None = None,  # noqa: E501 — called before (result=None) and after each tool
     history: list[dict] | None = None,
     mcp_bridge: MCPBridge | None = None,
+    settings: Settings | None = None,
 ) -> AgentResponse:
     """Run the agentic loop.
 
@@ -71,8 +73,10 @@ def run_agent(
         region: AWS region for Bedrock and AWS API tools.
         max_tokens: Max tokens per Converse call.
         max_iterations: Safety limit on agent loop iterations.
-        on_step: Optional callback invoked after each tool execution.
+        on_step: Optional callback invoked before (tool_result=None)
+            and after (tool_result set) each tool execution.
         history: Prior conversation messages for multi-turn context.
+        settings: Application settings (for ingestion tools).
 
     Returns:
         AgentResponse with the final answer, steps, token usage,
@@ -86,7 +90,9 @@ def run_agent(
     except BedrockError as e:
         raise AgentError(str(e))
 
-    context = ToolContext(db_conn=db_conn, aws_region=region)
+    context = ToolContext(
+        db_conn=db_conn, aws_region=region, settings=settings
+    )
 
     system_text = AGENT_SYSTEM_PROMPT
     all_tools = list(TOOL_DEFINITIONS)
@@ -175,6 +181,10 @@ def run_agent(
                     tool_input=tool_input,
                 )
 
+                # Notify before execution (tool_result is None)
+                if on_step:
+                    on_step(step)
+
                 # Execute the tool
                 result = execute_tool(
                     tool_name, tool_input, context,
@@ -182,6 +192,7 @@ def run_agent(
                 )
                 step.tool_result = result
 
+                # Notify after execution (tool_result is set)
                 if on_step:
                     on_step(step)
 

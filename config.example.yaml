@@ -11,6 +11,10 @@ database:
   path: "./data/costs.duckdb"     # DuckDB file path (or set AWS_COST_DB_PATH env var)
   cache_dir: "./data/cache"       # Local cache for downloaded parquet files
 
+cost_explorer:
+  region: "us-east-1"               # AWS region for Cost Explorer API
+  lookback_days: 14                  # Default days to look back (max 365)
+
 anomaly:
   rolling_window_days: 14         # Days of history for baseline
   z_score_threshold: 2.5          # Default z-score threshold (overridden by --sensitivity)

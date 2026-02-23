@@ -52,6 +52,11 @@ def trends(
     top: int = typer.Option(
         10, "--top", help="Show top N groups by cost"
     ),
+    source: str = typer.Option(
+        "all",
+        "--source",
+        help="Data source filter: cur, cost-explorer, or all",
+    ),
 ) -> None:
     """Show daily cost trends by dimension."""
     settings = load_settings(config)
@@ -66,17 +71,25 @@ def trends(
         )
         raise typer.Exit(1)
 
+    source_map = {"cur": "cur", "cost-explorer": "cost_explorer", "all": None}
+    if source not in source_map:
+        console.print(
+            "[red]Error:[/red] --source must be one of: cur, cost-explorer, all"
+        )
+        raise typer.Exit(1)
+    data_source = source_map[source]
+
     if not _check_has_data(conn):
         console.print(
             "[yellow]No cost data found.[/yellow] "
-            "Run [bold]ingest[/bold] first to load CUR data."
+            "Run [bold]ingest[/bold] first to load cost data."
         )
         raise typer.Exit(1)
 
     column, label = GROUP_BY_LABELS[group_by]
 
     # Show total daily costs
-    totals = get_total_daily_costs(conn, days=days)
+    totals = get_total_daily_costs(conn, days=days, data_source=data_source)
     if totals:
         console.print(
             f"\n[bold]Total Daily Costs "
@@ -90,7 +103,8 @@ def trends(
 
     # Show grouped trends
     trend_rows = get_daily_trends(
-        conn, days=days, group_by=column, top_n=top
+        conn, days=days, group_by=column, top_n=top,
+        data_source=data_source,
     )
 
     if trend_rows:

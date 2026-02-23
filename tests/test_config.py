@@ -95,3 +95,36 @@ def test_default_settings():
     assert settings.agent.region == "us-east-1"
     assert settings.agent.max_agent_iterations == 10
     assert "claude-sonnet-4" in settings.agent.model
+    assert settings.cost_explorer.region == "us-east-1"
+    assert settings.cost_explorer.lookback_days == 14
+
+
+def test_cost_explorer_config_from_yaml():
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as f:
+        f.write(
+            "cost_explorer:\n"
+            "  region: eu-west-1\n"
+            "  lookback_days: 30\n"
+        )
+        f.flush()
+        settings = load_settings(f.name)
+    assert settings.cost_explorer.region == "eu-west-1"
+    assert settings.cost_explorer.lookback_days == 30
+
+
+def test_cost_explorer_lookback_too_large():
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as f:
+        f.write("cost_explorer:\n  lookback_days: 400\n")
+        f.flush()
+        with pytest.raises(ConfigError, match="<= 365"):
+            load_settings(f.name)
+
+
+def test_cost_explorer_region_env_override(monkeypatch):
+    monkeypatch.setenv("AWS_COST_EXPLORER_REGION", "ap-southeast-1")
+    settings = load_settings(None)
+    assert settings.cost_explorer.region == "ap-southeast-1"

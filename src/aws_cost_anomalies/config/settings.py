@@ -49,6 +49,12 @@ class MCPServerConfigEntry:
 
 
 @dataclass
+class CostExplorerConfig:
+    region: str = "us-east-1"
+    lookback_days: int = 14
+
+
+@dataclass
 class AgentConfig:
     model: str = "us.anthropic.claude-sonnet-4-20250514-v1:0"
     max_tokens: int = 4096
@@ -67,6 +73,9 @@ class Settings:
         default_factory=AnomalyConfig
     )
     agent: AgentConfig = field(default_factory=AgentConfig)
+    cost_explorer: CostExplorerConfig = field(
+        default_factory=CostExplorerConfig
+    )
 
 
 def _safe_int(value, name: str, default: int) -> int:
@@ -231,4 +240,28 @@ def load_settings(
         mcp_servers=mcp_servers,
     )
 
-    return Settings(s3=s3, database=db, anomaly=anomaly, agent=agent_cfg)
+    ce_raw = raw.get("cost_explorer", {})
+    ce_lookback = _safe_int(
+        ce_raw.get("lookback_days", 14),
+        "cost_explorer.lookback_days",
+        14,
+    )
+    if ce_lookback > 365:
+        raise ConfigError(
+            "cost_explorer.lookback_days must be <= 365"
+        )
+    cost_explorer = CostExplorerConfig(
+        region=os.environ.get(
+            "AWS_COST_EXPLORER_REGION",
+            str(ce_raw.get("region", "us-east-1")),
+        ),
+        lookback_days=ce_lookback,
+    )
+
+    return Settings(
+        s3=s3,
+        database=db,
+        anomaly=anomaly,
+        agent=agent_cfg,
+        cost_explorer=cost_explorer,
+    )

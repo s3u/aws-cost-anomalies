@@ -23,17 +23,17 @@ def db_conn():
     conn.execute(
         "INSERT INTO daily_cost_summary VALUES "
         "('2025-01-15', '111111111111', 'AmazonEC2', "
-        "'us-east-1', 1500.50, 1400.00, 100, 50)"
+        "'us-east-1', 1500.50, 1400.00, 100, 50, 'cur')"
     )
     conn.execute(
         "INSERT INTO daily_cost_summary VALUES "
         "('2025-01-15', '111111111111', 'AmazonS3', "
-        "'us-east-1', 250.75, 240.00, 5000, 20)"
+        "'us-east-1', 250.75, 240.00, 5000, 20, 'cur')"
     )
     conn.execute(
         "INSERT INTO daily_cost_summary VALUES "
         "('2025-01-16', '222222222222', 'AmazonEC2', "
-        "'us-west-2', 800.00, 750.00, 80, 30)"
+        "'us-west-2', 800.00, 750.00, 80, 30, 'cur')"
     )
     return conn
 
@@ -45,7 +45,7 @@ def context(db_conn):
 
 class TestToolDefinitions:
     def test_all_tools_have_spec(self):
-        assert len(TOOL_DEFINITIONS) == 5
+        assert len(TOOL_DEFINITIONS) == 7
         for defn in TOOL_DEFINITIONS:
             assert "toolSpec" in defn
             spec = defn["toolSpec"]
@@ -61,6 +61,8 @@ class TestToolDefinitions:
             "get_cloudwatch_metrics",
             "get_budget_info",
             "get_organization_info",
+            "ingest_cost_explorer_data",
+            "ingest_cur_data",
         }
 
 
@@ -351,6 +353,110 @@ class TestOrganizationInfo:
 
         assert "error" not in result
         assert result["account"]["name"] == "Production"
+
+
+class TestIngestCostExplorerData:
+    def test_missing_dates_returns_error(self, context):
+        result = execute_tool(
+            "ingest_cost_explorer_data", {}, context
+        )
+        assert "error" in result
+        assert "required" in result["error"].lower()
+
+    def test_missing_end_date_returns_error(self, context):
+        result = execute_tool(
+            "ingest_cost_explorer_data",
+            {"start_date": "2025-01-01"},
+            context,
+        )
+        assert "error" in result
+
+    @patch(
+        "aws_cost_anomalies.ingestion.cost_explorer."
+        "fetch_cost_explorer_data"
+    )
+    def test_successful_import(self, mock_fetch, db_conn):
+        from datetime import date as d
+
+        from aws_cost_anomalies.config.settings import Settings
+        from aws_cost_anomalies.ingestion.cost_explorer import (
+            CostExplorerRow,
+        )
+
+        mock_fetch.return_value = [
+            CostExplorerRow(
+                usage_date=d(2025, 1, 1),
+                usage_account_id="111",
+                product_code="AmazonEC2",
+                total_unblended_cost=100.0,
+                total_blended_cost=95.0,
+            ),
+        ]
+        ctx = ToolContext(
+            db_conn=db_conn,
+            aws_region="us-east-1",
+            settings=Settings(),
+        )
+        result = execute_tool(
+            "ingest_cost_explorer_data",
+            {"start_date": "2025-01-01", "end_date": "2025-01-02"},
+            ctx,
+        )
+        assert "error" not in result
+        assert result["rows_loaded"] == 1
+        assert result["source"] == "cost_explorer"
+
+    @patch(
+        "aws_cost_anomalies.ingestion.cost_explorer."
+        "fetch_cost_explorer_data"
+    )
+    def test_api_error_returned(self, mock_fetch, context):
+        from aws_cost_anomalies.ingestion.cost_explorer import (
+            CostExplorerError,
+        )
+
+        mock_fetch.side_effect = CostExplorerError("no creds")
+        result = execute_tool(
+            "ingest_cost_explorer_data",
+            {"start_date": "2025-01-01", "end_date": "2025-01-02"},
+            context,
+        )
+        assert "error" in result
+        assert "no creds" in result["error"]
+
+
+class TestIngestCurData:
+    def test_no_settings_returns_error(self, db_conn):
+        ctx = ToolContext(db_conn=db_conn, settings=None)
+        result = execute_tool("ingest_cur_data", {}, ctx)
+        assert "error" in result
+        assert "Settings" in result["error"]
+
+    def test_no_s3_config_returns_error(self, db_conn):
+        from aws_cost_anomalies.config.settings import Settings
+
+        ctx = ToolContext(
+            db_conn=db_conn, settings=Settings()
+        )
+        result = execute_tool("ingest_cur_data", {}, ctx)
+        assert "error" in result
+        assert "bucket" in result["error"].lower()
+
+    def test_invalid_month_format(self, db_conn):
+        from aws_cost_anomalies.config.settings import (
+            S3Config,
+            Settings,
+        )
+
+        settings = Settings(
+            s3=S3Config(bucket="b", report_name="r")
+        )
+        ctx = ToolContext(db_conn=db_conn, settings=settings)
+        result = execute_tool(
+            "ingest_cur_data", {"month": "bad"}, ctx
+        )
+        assert "error" in result
+        assert "YYYY-MM" in result["error"]
 
 
 class TestUnknownTool:

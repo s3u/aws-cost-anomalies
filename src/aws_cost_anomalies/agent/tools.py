@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from aws_cost_anomalies.agent.mcp_bridge import MCPBridge
+    from aws_cost_anomalies.config.settings import Settings
 
 import boto3
 import duckdb
@@ -26,6 +27,7 @@ class ToolContext:
 
     db_conn: duckdb.DuckDBPyConnection
     aws_region: str = "us-east-1"
+    settings: Settings | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +198,72 @@ ORGANIZATION_SPEC: dict = {
     }
 }
 
+INGEST_COST_EXPLORER_SPEC: dict = {
+    "toolSpec": {
+        "name": "ingest_cost_explorer_data",
+        "description": (
+            "Import daily cost data from the AWS Cost Explorer API "
+            "into the local database. Use this when the database is "
+            "empty or when the user asks to refresh/import Cost "
+            "Explorer data."
+        ),
+        "inputSchema": {
+            "json": {
+                "type": "object",
+                "properties": {
+                    "start_date": {
+                        "type": "string",
+                        "description": (
+                            "Start date in YYYY-MM-DD format (inclusive)."
+                        ),
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": (
+                            "End date in YYYY-MM-DD format (exclusive)."
+                        ),
+                    },
+                },
+                "required": ["start_date", "end_date"],
+            }
+        },
+    }
+}
+
+INGEST_CUR_DATA_SPEC: dict = {
+    "toolSpec": {
+        "name": "ingest_cur_data",
+        "description": (
+            "Import CUR (Cost & Usage Report) data from S3 into the "
+            "local database. Requires S3 configuration in config.yaml. "
+            "Use when the user asks to import or refresh CUR data."
+        ),
+        "inputSchema": {
+            "json": {
+                "type": "object",
+                "properties": {
+                    "month": {
+                        "type": "string",
+                        "description": (
+                            "Specific month to ingest as YYYY-MM "
+                            "(e.g. 2025-01). If omitted, ingests "
+                            "all available billing periods."
+                        ),
+                    },
+                    "full_refresh": {
+                        "type": "boolean",
+                        "description": (
+                            "Re-ingest even if data already exists "
+                            "for the period. Default false."
+                        ),
+                    },
+                },
+                "required": [],
+            }
+        },
+    }
+}
+
 
 # ---------------------------------------------------------------------------
 # Tool registry
@@ -207,6 +275,8 @@ TOOL_DEFINITIONS: list[dict] = [
     CLOUDWATCH_SPEC,
     BUDGET_SPEC,
     ORGANIZATION_SPEC,
+    INGEST_COST_EXPLORER_SPEC,
+    INGEST_CUR_DATA_SPEC,
 ]
 
 
@@ -488,6 +558,200 @@ def _execute_organization_info(
         return {"error": f"Organizations error: {e}"}
 
 
+def _execute_ingest_cost_explorer(
+    tool_input: dict, context: ToolContext
+) -> dict:
+    """Import Cost Explorer data into the local database."""
+    from aws_cost_anomalies.ingestion.cost_explorer import (
+        CostExplorerError,
+        fetch_cost_explorer_data,
+    )
+    from aws_cost_anomalies.storage.schema import (
+        insert_cost_explorer_summary,
+    )
+
+    start = tool_input.get("start_date", "")
+    end = tool_input.get("end_date", "")
+    if not start or not end:
+        return {"error": "start_date and end_date are required."}
+
+    ce_region = "us-east-1"
+    if context.settings and context.settings.cost_explorer:
+        ce_region = context.settings.cost_explorer.region
+
+    pages_fetched = 0
+
+    def on_page(page_num: int, rows_so_far: int) -> None:
+        nonlocal pages_fetched
+        pages_fetched = page_num
+
+    try:
+        rows = fetch_cost_explorer_data(
+            start_date=start,
+            end_date=end,
+            region=ce_region,
+            on_page=on_page,
+        )
+    except CostExplorerError as e:
+        return {"error": str(e)}
+
+    # Transform to tuples for insert
+    tuples = [
+        (
+            r.usage_date,
+            r.usage_account_id,
+            r.product_code,
+            "",  # region — CE 2-dim GroupBy limit
+            r.total_unblended_cost,
+            r.total_blended_cost,
+            0.0,  # usage_amount
+            0,  # line_item_count
+        )
+        for r in rows
+    ]
+
+    inserted = insert_cost_explorer_summary(context.db_conn, tuples)
+    return {
+        "rows_loaded": inserted,
+        "date_range": f"{start} to {end}",
+        "pages_fetched": pages_fetched,
+        "source": "cost_explorer",
+    }
+
+
+def _execute_ingest_cur_data(
+    tool_input: dict, context: ToolContext
+) -> dict:
+    """Import CUR data from S3 into the local database."""
+    import re
+
+    from aws_cost_anomalies.ingestion.loader import (
+        delete_billing_period_data,
+        get_ingested_assemblies,
+        load_parquet_file,
+        record_ingestion,
+    )
+    from aws_cost_anomalies.ingestion.s3_client import (
+        CURBrowser,
+        S3Error,
+    )
+    from aws_cost_anomalies.storage.schema import (
+        rebuild_daily_summary,
+    )
+
+    if not context.settings:
+        return {"error": "Settings not available."}
+
+    s3_cfg = context.settings.s3
+    if not s3_cfg.bucket or not s3_cfg.report_name:
+        return {
+            "error": (
+                "S3 bucket and report_name must be configured in "
+                "config.yaml to use CUR ingestion."
+            )
+        }
+
+    month = tool_input.get("month")
+    full_refresh = tool_input.get("full_refresh", False)
+
+    try:
+        browser = CURBrowser(
+            bucket=s3_cfg.bucket,
+            prefix=s3_cfg.prefix,
+            report_name=s3_cfg.report_name,
+            region=s3_cfg.region,
+        )
+    except S3Error as e:
+        return {"error": f"S3 connection error: {e}"}
+
+    # Determine billing periods
+    try:
+        if month:
+            if not re.match(r"^\d{4}-\d{2}$", month):
+                return {
+                    "error": (
+                        f"Invalid month format '{month}'. "
+                        "Use YYYY-MM."
+                    )
+                }
+            y, m = int(month[:4]), int(month[5:7])
+            if m == 12:
+                end_y, end_m = y + 1, 1
+            else:
+                end_y, end_m = y, m + 1
+            periods = [
+                f"{y}{m:02d}01-{end_y}{end_m:02d}01"
+            ]
+        else:
+            periods = browser.list_billing_periods()
+    except S3Error as e:
+        return {"error": f"Error listing periods: {e}"}
+
+    if not periods:
+        return {"error": "No billing periods found in S3."}
+
+    ingested = (
+        get_ingested_assemblies(context.db_conn)
+        if not full_refresh
+        else {}
+    )
+
+    total_rows = 0
+    errors: list[dict] = []
+    cache_dir = context.settings.database.cache_dir
+
+    for period in periods:
+        try:
+            manifest = browser.get_manifest(period)
+        except (S3Error, FileNotFoundError, ValueError) as e:
+            errors.append({"period": period, "error": str(e)})
+            continue
+
+        if not full_refresh and period in ingested:
+            if ingested[period] == manifest.assembly_id:
+                continue
+            delete_billing_period_data(context.db_conn, period)
+
+        if full_refresh:
+            delete_billing_period_data(context.db_conn, period)
+
+        for s3_key in manifest.report_keys:
+            try:
+                local_path = browser.download_file(
+                    s3_key, cache_dir
+                )
+                rows = load_parquet_file(
+                    context.db_conn,
+                    local_path,
+                    source_file=s3_key,
+                )
+                record_ingestion(
+                    context.db_conn,
+                    manifest.assembly_id,
+                    period,
+                    s3_key,
+                    rows,
+                )
+                total_rows += rows
+            except Exception as e:
+                errors.append(
+                    {"key": s3_key, "error": str(e)}
+                )
+                continue
+
+    summary_rows = rebuild_daily_summary(context.db_conn)
+
+    result: dict = {
+        "rows_loaded": total_rows,
+        "summary_rows": summary_rows,
+        "periods": periods,
+        "source": "cur",
+    }
+    if errors:
+        result["errors"] = errors
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Executor registry and dispatch
 # ---------------------------------------------------------------------------
@@ -498,6 +762,8 @@ _EXECUTORS: dict[str, Callable[[dict, ToolContext], dict]] = {
     "get_cloudwatch_metrics": _execute_cloudwatch,
     "get_budget_info": _execute_budget_info,
     "get_organization_info": _execute_organization_info,
+    "ingest_cost_explorer_data": _execute_ingest_cost_explorer,
+    "ingest_cur_data": _execute_ingest_cur_data,
 }
 
 

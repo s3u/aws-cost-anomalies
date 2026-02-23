@@ -1,10 +1,11 @@
 # AWS Cost Anomalies
 
-Detect cost anomalies across your AWS root and linked accounts. Ingests Cost and Usage Report (CUR) data from S3, stores it locally in DuckDB, analyzes daily trends, detects anomalies using statistical methods, and supports natural language queries via an agentic system powered by AWS Bedrock.
+Detect cost anomalies across your AWS root and linked accounts. Ingests cost data from Cost Explorer API or CUR (S3), stores it locally in DuckDB, analyzes daily trends, detects anomalies using statistical methods, and supports natural language queries via an agentic system powered by AWS Bedrock.
 
 ## Features
 
-- **CUR Ingestion** — Download and load CUR v1/v2 parquet files from S3 into DuckDB with incremental updates
+- **Dual Ingestion** — Import cost data from the Cost Explorer API (quick, no S3 setup) or CUR v1/v2 parquet files from S3 (full detail). Both sources coexist in the same database.
+- **Agent-Driven Workflow** — The agent can import data, query it, and call AWS APIs. On first run with an empty database, the agent offers to import Cost Explorer data automatically.
 - **Trend Analysis** — Daily cost trends grouped by service, account, or region with day-over-day changes
 - **Anomaly Detection** — Z-score based detection with configurable sensitivity and rolling windows
 - **Natural Language Queries** — Ask questions about your costs in plain English via an agentic system that uses DuckDB, Cost Explorer, CloudWatch, Budgets, and Organizations
@@ -14,8 +15,8 @@ Detect cost anomalies across your AWS root and linked accounts. Ingests Cost and
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
-- AWS credentials configured (for CUR access and Bedrock)
-- An S3 bucket with CUR data in parquet format
+- AWS credentials configured (for Cost Explorer API and/or Bedrock)
+- For CUR ingestion: an S3 bucket with CUR data in parquet format (optional — Cost Explorer works without S3)
 
 ## Installation
 
@@ -41,7 +42,7 @@ docker compose build
 docker compose run --rm app
 
 # Or run commands directly
-docker compose run --rm app aws-cost-anomalies ingest
+docker compose run --rm app aws-cost-anomalies ingest --source cost-explorer
 ```
 
 ## Configuration
@@ -58,6 +59,10 @@ s3:
   prefix: cur-reports              # S3 prefix where CUR reports are stored
   report_name: your-report-name    # CUR report name as configured in AWS
   region: us-east-1
+
+cost_explorer:
+  region: us-east-1               # AWS region for Cost Explorer API
+  lookback_days: 14               # Default days to look back (max 365)
 
 database:
   path: ./data/costs.duckdb       # DuckDB file path
@@ -89,26 +94,38 @@ agent:
 | `AWS_COST_DB_PATH` | `database.path` |
 | `AWS_COST_CACHE_DIR` | `database.cache_dir` |
 | `AWS_BEDROCK_REGION` | `agent.region` (Bedrock region) |
+| `AWS_COST_EXPLORER_REGION` | `cost_explorer.region` |
 
 An `.env.example` file is provided as a template.
 
 ## Usage
 
-### Ingest CUR Data
+### Quick Start (No S3 Required)
+
+The fastest way to get started is to use the agent — it will offer to import Cost Explorer data on first run:
 
 ```bash
-# Ingest all available billing periods
-aws-cost-anomalies ingest
+# Start an interactive session — agent auto-detects empty DB
+aws-cost-anomalies query -i
 
-# Ingest a specific month
-aws-cost-anomalies ingest --date 2025-01
-
-# Force re-ingest everything
-aws-cost-anomalies ingest --full-refresh
-
-# With custom config
-aws-cost-anomalies ingest --config /path/to/config.yaml
+# Or import Cost Explorer data directly via CLI
+aws-cost-anomalies ingest --source cost-explorer --days 30
 ```
+
+### Ingest Data
+
+```bash
+# Import from Cost Explorer API (no S3 setup needed)
+aws-cost-anomalies ingest --source cost-explorer
+aws-cost-anomalies ingest --source cost-explorer --days 90
+
+# Import CUR data from S3 (requires S3 config)
+aws-cost-anomalies ingest
+aws-cost-anomalies ingest --source cur --date 2025-01
+aws-cost-anomalies ingest --source cur --full-refresh
+```
+
+Both sources coexist — ingesting one does not replace the other. The `daily_cost_summary` table has a `data_source` column (`'cur'` or `'cost_explorer'`) to distinguish them.
 
 ### View Trends
 
@@ -119,8 +136,11 @@ aws-cost-anomalies trends
 # Last 30 days, grouped by account, top 5
 aws-cost-anomalies trends --days 30 --group-by account --top 5
 
-# Group by region
-aws-cost-anomalies trends --group-by region
+# Only Cost Explorer data
+aws-cost-anomalies trends --source cost-explorer
+
+# Only CUR data
+aws-cost-anomalies trends --source cur
 ```
 
 ### Detect Anomalies
@@ -132,8 +152,8 @@ aws-cost-anomalies anomalies
 # High sensitivity (lower threshold, catches more)
 aws-cost-anomalies anomalies --sensitivity high
 
-# Low sensitivity (higher threshold, only major anomalies)
-aws-cost-anomalies anomalies --sensitivity low --days 30
+# Low sensitivity with specific data source
+aws-cost-anomalies anomalies --sensitivity low --days 30 --source cost-explorer
 
 # Check by account
 aws-cost-anomalies anomalies --group-by account
@@ -156,7 +176,13 @@ aws-cost-anomalies query "What are my top 5 most expensive services?"
 aws-cost-anomalies query --interactive
 ```
 
-The agent can query the local DuckDB database, call AWS Cost Explorer, check CloudWatch alarms, inspect Budgets, and look up Organization account names. Tool calls are displayed inline as the agent reasons.
+The agent can:
+- **Query** the local DuckDB database (CUR and/or Cost Explorer data)
+- **Import data** from Cost Explorer or CUR on demand
+- **Call AWS APIs** — Cost Explorer (real-time), CloudWatch, Budgets, Organizations
+- **Auto-bootstrap** — on first run with an empty DB, offers to import Cost Explorer data
+
+On first run with no data, the agent detects the empty database and offers to import Cost Explorer data from 2025-07-01 to present. No separate `ingest` step is required.
 
 #### MCP Server Integration
 
@@ -170,14 +196,32 @@ Then add `mcp_servers` entries under `agent` in `config.yaml` (see [Configuratio
 
 ## How It Works
 
+### Data Sources
+
+The tool supports two data sources that coexist in the same database:
+
+| Source | Setup | Detail Level |
+|--------|-------|-------------|
+| **Cost Explorer** | Just AWS credentials | Daily costs by service and account. No region, no usage amounts. |
+| **CUR (S3)** | S3 bucket with CUR reports | Full detail: region, resource-level, usage types, line items. |
+
+The `daily_cost_summary` table has a `data_source` column to distinguish them. CLI commands accept `--source` to filter by source.
+
 ### Ingestion
 
+**Cost Explorer path:**
+1. Calls `ce:GetCostAndUsage` with DAILY granularity, grouped by SERVICE and LINKED_ACCOUNT
+2. Paginates through all results
+3. Maps CE service names to CUR product codes for consistency
+4. Replaces existing Cost Explorer rows in `daily_cost_summary` (CUR data is preserved)
+
+**CUR path:**
 1. Lists billing period folders in your CUR S3 bucket
 2. Downloads `manifest.json` for each period to get data file locations
 3. Compares assembly IDs against previously ingested data to detect changes
 4. Downloads new/updated parquet files to local cache
 5. Loads into DuckDB with automatic CUR v1/v2 column mapping
-6. Rebuilds pre-aggregated daily cost summary table
+6. Rebuilds pre-aggregated daily cost summary table (Cost Explorer data is preserved)
 
 ### Anomaly Detection
 
@@ -192,7 +236,7 @@ Uses a modified z-score algorithm over a rolling window:
 ### Data Schema
 
 - **cost_line_items** — Raw CUR data with normalized column names (21 cost/usage columns)
-- **daily_cost_summary** — Pre-aggregated daily totals by account, service, and region
+- **daily_cost_summary** — Pre-aggregated daily totals by account, service, region, and data source
 - **ingestion_log** — Tracks ingested files for incremental updates
 
 ## Development
@@ -201,7 +245,7 @@ Uses a modified z-score algorithm over a rolling window:
 # Install dev dependencies
 uv sync --extra dev
 
-# Run unit tests (153 tests, evals excluded by default)
+# Run unit tests (173 tests, evals excluded by default)
 uv run pytest
 
 # Run with verbose output
@@ -246,7 +290,7 @@ uv run python scripts/generate_sample_data.py
 src/aws_cost_anomalies/
 ├── cli/           # Typer CLI commands + Rich formatting
 ├── config/        # YAML config loader with validation
-├── ingestion/     # S3 client, manifest parser, parquet loader
+├── ingestion/     # S3 client, Cost Explorer client, manifest parser, parquet loader
 ├── storage/       # DuckDB connection + schema management
 ├── analysis/      # Trend aggregation + anomaly detection
 ├── agent/         # Bedrock-powered agentic system

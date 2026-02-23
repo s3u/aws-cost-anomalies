@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS daily_cost_summary (
     total_unblended_cost DOUBLE,
     total_blended_cost DOUBLE,
     total_usage_amount DOUBLE,
-    line_item_count BIGINT
+    line_item_count BIGINT,
+    data_source VARCHAR DEFAULT 'cur'
 )
 """
 
@@ -78,6 +79,10 @@ _INDEXES = [
         "idx_dcs_account",
         "daily_cost_summary(usage_account_id)",
     ),
+    (
+        "idx_dcs_source",
+        "daily_cost_summary(data_source)",
+    ),
     # Speed up incremental ingestion checks
     (
         "idx_il_period",
@@ -95,6 +100,13 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(COST_LINE_ITEMS_DDL)
     conn.execute(DAILY_COST_SUMMARY_DDL)
     conn.execute(INGESTION_LOG_DDL)
+
+    # Migration: add data_source column to existing databases
+    conn.execute(
+        "ALTER TABLE daily_cost_summary "
+        "ADD COLUMN IF NOT EXISTS data_source VARCHAR DEFAULT 'cur'"
+    )
+
     for idx_name, idx_def in _INDEXES:
         conn.execute(
             f"CREATE INDEX IF NOT EXISTS {idx_name} "
@@ -108,29 +120,76 @@ def rebuild_daily_summary(
     """Rebuild daily_cost_summary from cost_line_items.
 
     Excludes non-usage line item types.
-    Returns the number of rows in the rebuilt summary.
+    Only deletes rows with data_source='cur', preserving Cost Explorer data.
+    Returns the number of CUR rows in the rebuilt summary.
     """
-    conn.execute("DELETE FROM daily_cost_summary")
-    conn.execute(f"""
-        INSERT INTO daily_cost_summary
-        SELECT
-            CAST(usage_start_date AS DATE) AS usage_date,
-            usage_account_id,
-            product_code,
-            region,
-            SUM(unblended_cost) AS total_unblended_cost,
-            SUM(blended_cost) AS total_blended_cost,
-            SUM(usage_amount) AS total_usage_amount,
-            COUNT(*) AS line_item_count
-        FROM cost_line_items
-        WHERE line_item_type NOT IN ({_EXCLUDED_LINE_ITEM_TYPES})
-        GROUP BY
-            CAST(usage_start_date AS DATE),
-            usage_account_id,
-            product_code,
-            region
-    """)
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        conn.execute(
+            "DELETE FROM daily_cost_summary WHERE data_source = 'cur'"
+        )
+        conn.execute(f"""
+            INSERT INTO daily_cost_summary
+            SELECT
+                CAST(usage_start_date AS DATE) AS usage_date,
+                usage_account_id,
+                product_code,
+                region,
+                SUM(unblended_cost) AS total_unblended_cost,
+                SUM(blended_cost) AS total_blended_cost,
+                SUM(usage_amount) AS total_usage_amount,
+                COUNT(*) AS line_item_count,
+                'cur' AS data_source
+            FROM cost_line_items
+            WHERE line_item_type NOT IN ({_EXCLUDED_LINE_ITEM_TYPES})
+            GROUP BY
+                CAST(usage_start_date AS DATE),
+                usage_account_id,
+                product_code,
+                region
+        """)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
     result = conn.execute(
-        "SELECT COUNT(*) FROM daily_cost_summary"
+        "SELECT COUNT(*) FROM daily_cost_summary "
+        "WHERE data_source = 'cur'"
     ).fetchone()
     return result[0] if result else 0
+
+
+def insert_cost_explorer_summary(
+    conn: duckdb.DuckDBPyConnection,
+    rows: list[tuple],
+) -> int:
+    """Insert Cost Explorer data into daily_cost_summary.
+
+    Replaces ALL existing Cost Explorer rows, then inserts the new
+    rows. This means calling with a smaller date range than a
+    previous import will discard the older CE data outside the new
+    range. CUR data is always preserved.
+
+    Each tuple: (usage_date, usage_account_id, product_code, region,
+                 total_unblended_cost, total_blended_cost,
+                 total_usage_amount, line_item_count)
+
+    Returns the number of rows inserted.
+    """
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        conn.execute(
+            "DELETE FROM daily_cost_summary "
+            "WHERE data_source = 'cost_explorer'"
+        )
+        if rows:
+            conn.executemany(
+                "INSERT INTO daily_cost_summary "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'cost_explorer')",
+                rows,
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return len(rows)
