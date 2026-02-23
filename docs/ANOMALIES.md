@@ -5,7 +5,7 @@ accounts, or regions using two complementary techniques over a rolling
 time window:
 
 1. **Point anomalies** — sudden spikes or drops detected via median/MAD
-   modified z-scores (robust to baseline outliers).
+   (Median Absolute Deviation) modified z-scores (robust to baseline outliers).
 2. **Trend anomalies** — gradual drift detected via Theil-Sen slope
    estimation (robust to individual outlier days).
 
