@@ -34,6 +34,7 @@ class AnomalyConfig:
     rolling_window_days: int = 14
     z_score_threshold: float = 2.5
     min_daily_cost: float = 1.0
+    drift_threshold_pct: float = 20.0
 
 
 @dataclass
@@ -175,6 +176,12 @@ def load_settings(
             "anomaly.min_daily_cost",
             1.0,
             min_val=0.0,
+        ),
+        drift_threshold_pct=_safe_float(
+            anom_raw.get("drift_threshold_pct", 20.0),
+            "anomaly.drift_threshold_pct",
+            20.0,
+            min_val=1.0,
         ),
     )
 

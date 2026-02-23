@@ -2,7 +2,7 @@
 """Generate realistic sample CUR v2 Parquet files for testing.
 
 Creates ~90 days of AWS cost data across multiple accounts and services,
-with a deliberate cost anomaly in the final 2 days for anomaly detection.
+with deliberate cost anomalies for anomaly detection testing.
 
 Usage:
     python scripts/generate_sample_data.py [--output-dir ./data/sample]
@@ -16,8 +16,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import random
-import sys
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -123,6 +123,47 @@ OPERATIONS = {
 AZ_SUFFIXES = ["a", "b", "c"]
 
 
+@dataclass
+class AnomalyPattern:
+    account: str
+    service: str
+    region: str | None  # None = all regions for this service
+    kind: str  # "spike", "drop", "drift_up", "drift_down"
+    start_days_ago: int  # how many days before end_date the pattern begins
+    multiplier: float  # flat multiplier (spike/drop) or start multiplier (drift)
+    end_multiplier: float  # ignored for spike/drop; target for drift
+    label: str  # human-readable description for print output
+
+
+DEFAULT_PATTERNS = [
+    AnomalyPattern(
+        account="111111111111", service="AmazonEC2", region=None,
+        kind="spike", start_days_ago=2, multiplier=4.0, end_multiplier=4.0,
+        label="Spike 4.0x — EC2 in Production (last 2 days, all regions)",
+    ),
+    AnomalyPattern(
+        account="222222222222", service="AmazonS3", region=None,
+        kind="drop", start_days_ago=2, multiplier=0.1, end_multiplier=0.1,
+        label="Drop  0.1x — S3 in Staging (last 2 days, all regions)",
+    ),
+    AnomalyPattern(
+        account="444444444444", service="AmazonRDS", region=None,
+        kind="drift_up", start_days_ago=30, multiplier=1.0, end_multiplier=2.0,
+        label="Drift 1.0x->2.0x — RDS in Data-Analytics (last 30 days)",
+    ),
+    AnomalyPattern(
+        account="555555555555", service="AWSLambda", region=None,
+        kind="drift_down", start_days_ago=30, multiplier=1.0, end_multiplier=0.5,
+        label="Drift 1.0x->0.5x — Lambda in Security (last 30 days)",
+    ),
+    AnomalyPattern(
+        account="333333333333", service="AmazonECS", region="us-east-1",
+        kind="spike", start_days_ago=1, multiplier=5.0, end_multiplier=5.0,
+        label="Spike 5.0x — ECS in Development (last 1 day, us-east-1 only)",
+    ),
+]
+
+
 def _make_resource_id(service: str, region: str, account: str) -> str:
     """Generate a realistic-looking resource ARN."""
     stub = hashlib.md5(f"{service}{region}{account}{random.random()}".encode()).hexdigest()[:12]
@@ -141,13 +182,28 @@ def _make_resource_id(service: str, region: str, account: str) -> str:
     return resource_map.get(service, f"arn:aws:{service.lower()}:{region}:{account}:{stub}")
 
 
+def _compute_pattern_multiplier(
+    pattern: AnomalyPattern, current: date, end_date: date,
+) -> float:
+    """Compute the effective multiplier for a pattern on a given date."""
+    pattern_start = end_date - timedelta(days=pattern.start_days_ago - 1)
+    if current < pattern_start:
+        return 1.0
+
+    if pattern.kind in ("spike", "drop"):
+        return pattern.multiplier
+
+    # drift_up / drift_down: linear interpolation
+    window_days = pattern.start_days_ago
+    days_in = (current - pattern_start).days
+    progress = min(days_in / max(window_days - 1, 1), 1.0)
+    return pattern.multiplier + (pattern.end_multiplier - pattern.multiplier) * progress
+
+
 def generate_cur_data(
     start_date: date,
     end_date: date,
-    anomaly_start: date | None = None,
-    anomaly_account: str = "111111111111",
-    anomaly_service: str = "AmazonEC2",
-    anomaly_multiplier: float = 4.0,
+    patterns: list[AnomalyPattern] | None = None,
     seed: int = 42,
 ) -> list[dict]:
     """Generate CUR v2 line items.
@@ -155,15 +211,15 @@ def generate_cur_data(
     Args:
         start_date: First day of data.
         end_date: Last day of data (inclusive).
-        anomaly_start: Date from which to inject cost anomaly.
-        anomaly_account: Account to spike.
-        anomaly_service: Service to spike.
-        anomaly_multiplier: How much to multiply costs.
+        patterns: Anomaly patterns to inject. None uses DEFAULT_PATTERNS.
         seed: Random seed for reproducibility.
 
     Returns:
         List of dicts, each a CUR v2 row.
     """
+    if patterns is None:
+        patterns = DEFAULT_PATTERNS
+
     rng = random.Random(seed)
     np_rng = np.random.default_rng(seed)
 
@@ -203,15 +259,13 @@ def generate_cur_data(
                     base_cost *= np_rng.normal(1.0, 0.05)
                     base_cost = max(base_cost, 0.01)
 
-                    # Apply anomaly multiplier
-                    is_anomaly = (
-                        anomaly_start
-                        and current >= anomaly_start
-                        and account_id == anomaly_account
-                        and svc_code == anomaly_service
-                    )
-                    if is_anomaly:
-                        base_cost *= anomaly_multiplier
+                    # Apply all matching anomaly patterns
+                    for p in patterns:
+                        if p.account != account_id or p.service != svc_code:
+                            continue
+                        if p.region is not None and p.region != region:
+                            continue
+                        base_cost *= _compute_pattern_multiplier(p, current, end_date)
 
                     # Generate 3-8 line items per (account, service, region, day)
                     usage_types = USAGE_TYPES.get(svc_code, ["{region}:Usage"])
@@ -419,16 +473,9 @@ def main():
         help="Number of days of data to generate (default: 90)",
     )
     parser.add_argument(
-        "--anomaly-days",
-        type=int,
-        default=2,
-        help="Number of recent days with anomaly (default: 2)",
-    )
-    parser.add_argument(
-        "--anomaly-multiplier",
-        type=float,
-        default=4.0,
-        help="Cost multiplier for anomaly (default: 4.0x)",
+        "--no-anomalies",
+        action="store_true",
+        help="Generate clean baseline data with no anomaly patterns",
     )
     parser.add_argument(
         "--seed",
@@ -446,21 +493,24 @@ def main():
 
     end_date = date.today() - timedelta(days=1)  # yesterday
     start_date = end_date - timedelta(days=args.days - 1)
-    anomaly_start = end_date - timedelta(days=args.anomaly_days - 1)
+    patterns = [] if args.no_anomalies else DEFAULT_PATTERNS
 
     print(f"Generating {args.days} days of CUR data...")
     print(f"  Date range: {start_date} to {end_date}")
     print(f"  Accounts:   {len(LINKED_ACCOUNTS)} linked + 1 payer")
     print(f"  Services:   {len(SERVICES)}")
-    print(f"  Anomaly:    {args.anomaly_multiplier}x EC2 spike in account 111111111111")
-    print(f"              starting {anomaly_start}")
+    if patterns:
+        print(f"  Anomaly patterns:")
+        for i, p in enumerate(patterns, 1):
+            print(f"    {i}. {p.label}")
+    else:
+        print(f"  Anomalies:  none (clean baseline)")
     print()
 
     rows = generate_cur_data(
         start_date=start_date,
         end_date=end_date,
-        anomaly_start=anomaly_start,
-        anomaly_multiplier=args.anomaly_multiplier,
+        patterns=patterns,
         seed=args.seed,
     )
     print(f"Generated {len(rows):,} line items")

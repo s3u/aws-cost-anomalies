@@ -69,25 +69,39 @@ def print_anomalies_table(anomalies: list[Anomaly]) -> None:
 
     table = Table(title="Cost Anomalies Detected", show_lines=True)
     table.add_column("Severity", justify="center")
+    table.add_column("Type", justify="center")
     table.add_column("Date", style="dim")
     table.add_column("Dimension")
     table.add_column("Current Cost", justify="right")
-    table.add_column("Avg Cost", justify="right")
-    table.add_column("Z-Score", justify="right")
+    table.add_column("Median Cost", justify="right")
+    table.add_column("Score", justify="right")
     table.add_column("Direction")
+
+    direction_icons = {
+        "spike": "^ spike",
+        "drop": "v drop",
+        "drift_up": "\u2197 drift",
+        "drift_down": "\u2198 drift",
+    }
 
     for a in anomalies:
         severity_style = SEVERITY_COLORS.get(a.severity, "")
-        direction_icon = "^ spike" if a.direction == "spike" else "v drop"
+        direction_label = direction_icons.get(a.direction, a.direction)
+
+        if a.kind == "trend":
+            score_str = f"{a.z_score:+.0%}"
+        else:
+            score_str = f"{a.z_score:+.2f}"
 
         table.add_row(
             f"[{severity_style}]{a.severity.upper()}[/{severity_style}]",
+            a.kind,
             str(a.usage_date),
             f"{a.group_by}={a.group_value}",
             format_currency(a.current_cost),
-            format_currency(a.mean_cost),
-            f"{a.z_score:+.2f}",
-            direction_icon,
+            format_currency(a.median_cost),
+            score_str,
+            direction_label,
         )
 
     console.print(table)

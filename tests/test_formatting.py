@@ -59,12 +59,25 @@ def test_print_anomalies_table_with_data():
             group_by="product_code",
             group_value="AmazonEC2",
             current_cost=500.0,
-            mean_cost=100.0,
-            std_cost=5.0,
+            median_cost=100.0,
+            mad=5.0,
             z_score=80.0,
             severity="critical",
             direction="spike",
-        )
+            kind="point",
+        ),
+        Anomaly(
+            usage_date=date(2025, 1, 14),
+            group_by="product_code",
+            group_value="AmazonEC2",
+            current_cost=140.0,
+            median_cost=100.0,
+            mad=2.0,
+            z_score=0.40,
+            severity="info",
+            direction="drift_up",
+            kind="trend",
+        ),
     ]
     # Just ensure it doesn't crash
     print_anomalies_table(anomalies)

@@ -23,9 +23,12 @@ from aws_cost_anomalies.storage.schema import create_tables
 console = Console()
 
 GROUP_BY_MAP = {
-    "service": "product_code",
-    "account": "usage_account_id",
-    "region": "region",
+    "service": ["product_code"],
+    "account": ["usage_account_id"],
+    "region": ["region"],
+    "service+account": ["product_code", "usage_account_id"],
+    "service+region": ["product_code", "region"],
+    "account+region": ["usage_account_id", "region"],
 }
 
 
@@ -52,7 +55,13 @@ def anomalies(
     group_by: str = typer.Option(
         "service",
         "--group-by",
-        help="Group by: service, account, or region",
+        help="Group by: service, account, region, "
+        "service+account, service+region, account+region",
+    ),
+    drift_threshold: Optional[int] = typer.Option(
+        None,
+        "--drift-threshold",
+        help="Drift threshold in percent (default: from config, or 20)",
     ),
 ) -> None:
     """Detect cost anomalies using z-score analysis."""
@@ -82,16 +91,19 @@ def anomalies(
         )
         raise typer.Exit(1)
 
-    column = GROUP_BY_MAP[group_by]
+    columns = GROUP_BY_MAP[group_by]
     min_cost = settings.anomaly.min_daily_cost
     threshold = SENSITIVITY_THRESHOLDS[sensitivity]
+
+    effective_drift = drift_threshold if drift_threshold is not None else settings.anomaly.drift_threshold_pct
 
     results = detect_anomalies(
         conn,
         days=days,
-        group_by=column,
+        group_by=columns,
         sensitivity=sensitivity,
         min_daily_cost=min_cost,
+        drift_threshold=effective_drift / 100,
     )
 
     print_anomalies_table(results)
@@ -100,5 +112,6 @@ def anomalies(
     console.print(
         f"\n[dim]Settings: {days}-day window, "
         f"sensitivity={sensitivity} (z>{threshold}), "
+        f"drift threshold={effective_drift:.0f}%, "
         f"min cost={format_currency(min_cost)}/day[/dim]"
     )

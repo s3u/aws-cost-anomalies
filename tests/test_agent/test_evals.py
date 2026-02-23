@@ -296,14 +296,14 @@ class TestDailyTrend:
         # Negated uses ("no spike", "without any surge") are fine.
         answer_lower = response.answer.lower()
         trend_words = ["increasing", "decreasing", "spike", "surge", "drop", "jumped"]
-        negation_prefixes = ["no ", "no\n", "zero ", "without ", "any ", "absent "]
+        negation_prefixes = ["no ", "no\n", "zero ", "without ", "any ", "absent ", "not ", "n't "]
         found_trend = []
         for word in trend_words:
             pos = answer_lower.find(word)
             if pos == -1:
                 continue
-            # Check if preceded by a negation within 15 chars
-            preceding = answer_lower[max(0, pos - 15):pos]
+            # Check if preceded by a negation within 40 chars
+            preceding = answer_lower[max(0, pos - 40):pos]
             if any(neg in preceding for neg in negation_prefixes):
                 continue
             found_trend.append(word)

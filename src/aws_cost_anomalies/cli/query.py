@@ -72,6 +72,7 @@ def _run_question(
     max_iterations: int,
     history: list[dict] | None = None,
     mcp_bridge=None,
+    verbose: bool = False,
 ) -> list[dict] | None:
     """Send a question to the agent and display the response.
 
@@ -87,7 +88,7 @@ def _run_question(
             region=region,
             max_tokens=max_tokens,
             max_iterations=max_iterations,
-            on_step=_on_agent_step,
+            on_step=_on_agent_step if verbose else None,
             history=history,
             mcp_bridge=mcp_bridge,
         )
@@ -121,6 +122,12 @@ def query(
         "--interactive",
         "-i",
         help="Interactive REPL mode",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show tool calls and SQL as the agent runs",
     ),
 ) -> None:
     """Ask questions about your AWS costs in natural language."""
@@ -166,10 +173,19 @@ def query(
 
     try:
         if interactive:
-            console.print("[bold]AWS Cost Query Agent[/bold]")
+            console.print("\n[bold]AWS Cost Query Agent[/bold]")
             console.print(
-                "Ask questions about your AWS costs in plain "
-                "English. Type 'exit' or 'quit' to leave.\n"
+                "Ask questions about your AWS costs in plain English. "
+                "The agent writes SQL against your CUR data, runs it, "
+                "and explains the results.\n"
+            )
+            console.print("[dim]Example queries:[/dim]")
+            console.print("[dim]  What are my top 5 most expensive services this month?[/dim]")
+            console.print("[dim]  Show me daily EC2 spend for the last 2 weeks[/dim]")
+            console.print("[dim]  Which accounts had the biggest cost increase?[/dim]")
+            console.print("[dim]  Break down last week's spend by service and region[/dim]")
+            console.print(
+                "\n[dim]Type 'exit' or 'quit' to leave.[/dim]\n"
             )
 
             history: list[dict] | None = None
@@ -192,6 +208,7 @@ def query(
                     max_tokens, max_iterations,
                     history=history,
                     mcp_bridge=bridge,
+                    verbose=verbose,
                 )
                 console.print()
 
@@ -200,6 +217,7 @@ def query(
                 conn, question, model, region,
                 max_tokens, max_iterations,
                 mcp_bridge=bridge,
+                verbose=verbose,
             )
 
         else:

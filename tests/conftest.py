@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timedelta
 
 import duckdb
@@ -19,9 +20,23 @@ def db() -> duckdb.DuckDBPyConnection:
     return conn
 
 
+def _cost(base: float, day: int, *, noise_amp: float = 2.0) -> float:
+    """Deterministic daily cost with small sinusoidal noise."""
+    return base + noise_amp * math.sin(day * 0.8)
+
+
 @pytest.fixture
 def db_with_data(db: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
-    """DuckDB with 14 days of synthetic cost data across 2 accounts and 3 services."""
+    """DuckDB with 31 days of realistic synthetic cost data.
+
+    Covers Jan 1–31 2025, 2 accounts × 3 services × 2 regions.
+
+    Built-in anomaly patterns:
+      - EC2 / acct-111 / us-east-1: gradual upward drift ($100 → ~$150)
+      - EC2 / acct-222 / us-east-1: steady $100, spike to $400 on day 28
+      - RDS / acct-111 / us-east-1: steady $50, drop to $10 on day 30
+      - Everything else: stable baselines with small noise
+    """
     base_date = date(2025, 1, 1)
     accounts = ["111111111111", "222222222222"]
     services = [
@@ -31,26 +46,62 @@ def db_with_data(db: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
     ]
     regions = ["us-east-1", "us-west-2"]
 
+    # Base costs per (service, account, region) — steady state
+    base_costs = {
+        ("AmazonEC2", "111111111111", "us-east-1"): 100.0,
+        ("AmazonEC2", "111111111111", "us-west-2"): 80.0,
+        ("AmazonEC2", "222222222222", "us-east-1"): 100.0,
+        ("AmazonEC2", "222222222222", "us-west-2"): 90.0,
+        ("AmazonS3", "111111111111", "us-east-1"): 20.0,
+        ("AmazonS3", "111111111111", "us-west-2"): 15.0,
+        ("AmazonS3", "222222222222", "us-east-1"): 25.0,
+        ("AmazonS3", "222222222222", "us-west-2"): 18.0,
+        ("AmazonRDS", "111111111111", "us-east-1"): 50.0,
+        ("AmazonRDS", "111111111111", "us-west-2"): 40.0,
+        ("AmazonRDS", "222222222222", "us-east-1"): 45.0,
+        ("AmazonRDS", "222222222222", "us-west-2"): 35.0,
+    }
+
     rows = []
     row_id = 0
-    for day_offset in range(14):
+    for day_offset in range(31):
         usage_date = base_date + timedelta(days=day_offset)
         for acct in accounts:
             for svc_code, svc_name in services:
                 for region in regions:
                     row_id += 1
-                    # Base cost with some variance per service
-                    base_cost = {"AmazonEC2": 100.0, "AmazonS3": 20.0, "AmazonRDS": 50.0}[
-                        svc_code
-                    ]
-                    # Add small daily variation
-                    cost = base_cost + (day_offset % 3) * 2.0
+                    base = base_costs[(svc_code, acct, region)]
+                    cost = _cost(base, day_offset)
+
+                    # --- Anomaly patterns ---
+
+                    # Drift: EC2 / acct-111 / us-east-1 rises ~$1.6/day
+                    if (svc_code, acct, region) == (
+                        "AmazonEC2", "111111111111", "us-east-1"
+                    ):
+                        cost = _cost(100.0 + day_offset * 1.6, day_offset)
+
+                    # Spike: EC2 / acct-222 / us-east-1 on day 28
+                    if (svc_code, acct, region) == (
+                        "AmazonEC2", "222222222222", "us-east-1"
+                    ) and day_offset == 27:
+                        cost = 400.0
+
+                    # Drop: RDS / acct-111 / us-east-1 on day 30
+                    if (svc_code, acct, region) == (
+                        "AmazonRDS", "111111111111", "us-east-1"
+                    ) and day_offset == 29:
+                        cost = 10.0
+
                     rows.append(
                         (
                             f"line-{row_id}",
-                            datetime.combine(usage_date, datetime.min.time()),
                             datetime.combine(
-                                usage_date + timedelta(days=1), datetime.min.time()
+                                usage_date, datetime.min.time()
+                            ),
+                            datetime.combine(
+                                usage_date + timedelta(days=1),
+                                datetime.min.time(),
                             ),
                             date(2025, 1, 1),
                             date(2025, 2, 1),

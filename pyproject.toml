@@ -32,6 +32,9 @@ aws-cost-anomalies = "aws_cost_anomalies.cli.app:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+aws_cost_anomalies = ["agent/*.md"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
