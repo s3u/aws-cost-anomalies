@@ -345,7 +345,7 @@ class TestExecuteToolMCPRouting:
         create_tables(conn)
         conn.execute(
             "INSERT INTO daily_cost_summary VALUES "
-            "('2025-01-15', '111', 'EC2', 'us-east-1', 100, 90, 10, 5, 'cur')"
+            "('2025-01-15', '111', 'EC2', 'us-east-1', 100, 90, 88, 10, 5, 'cur')"
         )
         ctx = ToolContext(db_conn=conn, aws_region="us-east-1")
 

@@ -70,7 +70,7 @@ def test_rebuild_preserves_cost_explorer_data(db):
     """Rebuild of CUR data must not delete Cost Explorer rows."""
     # Insert CE data first
     ce_rows = [
-        (date(2025, 1, 15), "111", "AmazonEC2", "", 200.0, 190.0, 0.0, 0),
+        (date(2025, 1, 15), "111", "AmazonEC2", "", 200.0, 190.0, 176.0, 0.0, 0),
     ]
     insert_cost_explorer_summary(db, ce_rows)
 
@@ -111,8 +111,8 @@ def test_rebuild_preserves_cost_explorer_data(db):
 def test_insert_cost_explorer_summary_basic(db):
     """Insert CE rows and verify they appear with correct data_source."""
     rows = [
-        (date(2025, 1, 1), "111", "AmazonEC2", "", 100.0, 95.0, 0.0, 0),
-        (date(2025, 1, 2), "111", "AmazonS3", "", 20.0, 19.0, 0.0, 0),
+        (date(2025, 1, 1), "111", "AmazonEC2", "", 100.0, 95.0, 88.0, 0.0, 0),
+        (date(2025, 1, 2), "111", "AmazonS3", "", 20.0, 19.0, 17.6, 0.0, 0),
     ]
     count = insert_cost_explorer_summary(db, rows)
     assert count == 2
@@ -127,13 +127,13 @@ def test_insert_cost_explorer_summary_basic(db):
 def test_insert_cost_explorer_summary_replaces_previous(db):
     """Calling insert twice replaces old CE rows (no duplicates)."""
     rows_v1 = [
-        (date(2025, 1, 1), "111", "AmazonEC2", "", 100.0, 95.0, 0.0, 0),
+        (date(2025, 1, 1), "111", "AmazonEC2", "", 100.0, 95.0, 88.0, 0.0, 0),
     ]
     insert_cost_explorer_summary(db, rows_v1)
 
     rows_v2 = [
-        (date(2025, 1, 1), "111", "AmazonEC2", "", 110.0, 105.0, 0.0, 0),
-        (date(2025, 1, 2), "111", "AmazonEC2", "", 50.0, 48.0, 0.0, 0),
+        (date(2025, 1, 1), "111", "AmazonEC2", "", 110.0, 105.0, 96.8, 0.0, 0),
+        (date(2025, 1, 2), "111", "AmazonEC2", "", 50.0, 48.0, 44.0, 0.0, 0),
     ]
     count = insert_cost_explorer_summary(db, rows_v2)
     assert count == 2
@@ -155,7 +155,7 @@ def test_insert_cost_explorer_summary_replaces_previous(db):
 def test_insert_cost_explorer_empty_rows(db):
     """Inserting empty list is a no-op and returns 0."""
     rows = [
-        (date(2025, 1, 1), "111", "AmazonEC2", "", 100.0, 95.0, 0.0, 0),
+        (date(2025, 1, 1), "111", "AmazonEC2", "", 100.0, 95.0, 88.0, 0.0, 0),
     ]
     insert_cost_explorer_summary(db, rows)
     count = insert_cost_explorer_summary(db, [])
@@ -173,14 +173,14 @@ def test_insert_cost_explorer_preserves_outside_date_range(db):
     """Importing a narrow date range preserves CE data outside that range."""
     # Import a wide range: Jan 1 and Jan 15
     wide_rows = [
-        (date(2025, 1, 1), "111", "AmazonEC2", "", 100.0, 95.0, 0.0, 0),
-        (date(2025, 1, 15), "111", "AmazonS3", "", 50.0, 48.0, 0.0, 0),
+        (date(2025, 1, 1), "111", "AmazonEC2", "", 100.0, 95.0, 88.0, 0.0, 0),
+        (date(2025, 1, 15), "111", "AmazonS3", "", 50.0, 48.0, 44.0, 0.0, 0),
     ]
     insert_cost_explorer_summary(db, wide_rows)
 
     # Now import just Jan 15 with updated cost
     narrow_rows = [
-        (date(2025, 1, 15), "111", "AmazonS3", "", 55.0, 52.0, 0.0, 0),
+        (date(2025, 1, 15), "111", "AmazonS3", "", 55.0, 52.0, 48.4, 0.0, 0),
     ]
     insert_cost_explorer_summary(db, narrow_rows)
 
@@ -219,7 +219,7 @@ def test_insert_cost_explorer_preserves_cur_data(db):
 
     # Now insert CE data
     ce_rows = [
-        (date(2025, 1, 15), "111", "AmazonEC2", "", 200.0, 190.0, 0.0, 0),
+        (date(2025, 1, 15), "111", "AmazonEC2", "", 200.0, 190.0, 176.0, 0.0, 0),
     ]
     insert_cost_explorer_summary(db, ce_rows)
 

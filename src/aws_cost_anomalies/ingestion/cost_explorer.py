@@ -26,6 +26,7 @@ class CostExplorerRow:
     product_code: str
     total_unblended_cost: float
     total_blended_cost: float
+    total_net_amortized_cost: float
 
 
 # Map common Cost Explorer service names to CUR product_code values.
@@ -113,7 +114,7 @@ def fetch_cost_explorer_data(
                     "End": end_date,
                 },
                 "Granularity": "DAILY",
-                "Metrics": ["UnblendedCost", "BlendedCost"],
+                "Metrics": ["UnblendedCost", "BlendedCost", "NetAmortizedCost"],
                 "GroupBy": [
                     {"Type": "DIMENSION", "Key": "SERVICE"},
                     {"Type": "DIMENSION", "Key": "LINKED_ACCOUNT"},
@@ -140,9 +141,15 @@ def fetch_cost_explorer_data(
                     blended = float(
                         group["Metrics"]["BlendedCost"]["Amount"]
                     )
+                    net_amortized = float(
+                        group["Metrics"]["NetAmortizedCost"]["Amount"]
+                    )
 
                     # Filter zero-cost entries
-                    if abs(unblended) < 0.001 and abs(blended) < 0.001:
+                    if all(
+                        abs(v) < 0.001
+                        for v in (unblended, blended, net_amortized)
+                    ):
                         continue
 
                     rows.append(
@@ -152,6 +159,7 @@ def fetch_cost_explorer_data(
                             product_code=_map_service_name(service_name),
                             total_unblended_cost=unblended,
                             total_blended_cost=blended,
+                            total_net_amortized_cost=net_amortized,
                         )
                     )
 

@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS daily_cost_summary (
     region VARCHAR,
     total_unblended_cost DOUBLE,
     total_blended_cost DOUBLE,
+    total_net_amortized_cost DOUBLE,
     total_usage_amount DOUBLE,
     line_item_count BIGINT,
     data_source VARCHAR DEFAULT 'cur'
@@ -107,6 +108,12 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
         "ADD COLUMN IF NOT EXISTS data_source VARCHAR DEFAULT 'cur'"
     )
 
+    # Migration: add net amortized cost column to existing databases
+    conn.execute(
+        "ALTER TABLE daily_cost_summary "
+        "ADD COLUMN IF NOT EXISTS total_net_amortized_cost DOUBLE DEFAULT 0.0"
+    )
+
     for idx_name, idx_def in _INDEXES:
         conn.execute(
             f"CREATE INDEX IF NOT EXISTS {idx_name} "
@@ -138,6 +145,7 @@ def rebuild_daily_summary(
                 region,
                 SUM(unblended_cost) AS total_unblended_cost,
                 SUM(blended_cost) AS total_blended_cost,
+                SUM(net_unblended_cost) AS total_net_amortized_cost,
                 SUM(usage_amount) AS total_usage_amount,
                 COUNT(*) AS line_item_count,
                 'cur' AS data_source
@@ -176,7 +184,8 @@ def insert_cost_explorer_summary(
 
     Each tuple: (usage_date, usage_account_id, product_code, region,
                  total_unblended_cost, total_blended_cost,
-                 total_usage_amount, line_item_count)
+                 total_net_amortized_cost, total_usage_amount,
+                 line_item_count)
 
     Returns the number of rows inserted.
     """
@@ -198,7 +207,7 @@ def insert_cost_explorer_summary(
         )
         conn.executemany(
             "INSERT INTO daily_cost_summary "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'cost_explorer')",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'cost_explorer')",
             rows,
         )
         conn.execute("COMMIT")

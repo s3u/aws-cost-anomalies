@@ -24,12 +24,12 @@ def db_conn():
     conn.execute(
         "INSERT INTO daily_cost_summary VALUES "
         "('2025-01-15', '111111111111', 'AmazonEC2', "
-        "'us-east-1', 1500.50, 1400.00, 100, 50, 'cur')"
+        "'us-east-1', 1500.50, 1400.00, 1320.44, 100, 50, 'cur')"
     )
     conn.execute(
         "INSERT INTO daily_cost_summary VALUES "
         "('2025-01-15', '111111111111', 'AmazonS3', "
-        "'us-east-1', 250.75, 240.00, 5000, 20, 'cur')"
+        "'us-east-1', 250.75, 240.00, 220.66, 5000, 20, 'cur')"
     )
     return conn
 

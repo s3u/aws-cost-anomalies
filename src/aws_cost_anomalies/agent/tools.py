@@ -403,7 +403,7 @@ def _execute_cost_explorer(
                 "End": tool_input["end_date"],
             },
             "Granularity": tool_input.get("granularity", "DAILY"),
-            "Metrics": ["UnblendedCost", "BlendedCost"],
+            "Metrics": ["UnblendedCost", "BlendedCost", "NetAmortizedCost"],
         }
 
         group_by = tool_input.get("group_by")
@@ -424,12 +424,16 @@ def _execute_cost_explorer(
                     {
                         "key": g["Keys"][0],
                         "unblended_cost": g["Metrics"]["UnblendedCost"]["Amount"],
+                        "net_amortized_cost": g["Metrics"]["NetAmortizedCost"]["Amount"],
                     }
                     for g in period["Groups"]
                 ]
             elif period.get("Total"):
                 entry["total_unblended_cost"] = period["Total"][
                     "UnblendedCost"
+                ]["Amount"]
+                entry["total_net_amortized_cost"] = period["Total"][
+                    "NetAmortizedCost"
                 ]["Amount"]
             results.append(entry)
 
@@ -674,6 +678,7 @@ def _execute_ingest_cost_explorer(
             "",  # region — CE 2-dim GroupBy limit
             r.total_unblended_cost,
             r.total_blended_cost,
+            r.total_net_amortized_cost,
             0.0,  # usage_amount
             0,  # line_item_count
         )

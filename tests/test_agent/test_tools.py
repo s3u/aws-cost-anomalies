@@ -23,17 +23,17 @@ def db_conn():
     conn.execute(
         "INSERT INTO daily_cost_summary VALUES "
         "('2025-01-15', '111111111111', 'AmazonEC2', "
-        "'us-east-1', 1500.50, 1400.00, 100, 50, 'cur')"
+        "'us-east-1', 1500.50, 1400.00, 1320.44, 100, 50, 'cur')"
     )
     conn.execute(
         "INSERT INTO daily_cost_summary VALUES "
         "('2025-01-15', '111111111111', 'AmazonS3', "
-        "'us-east-1', 250.75, 240.00, 5000, 20, 'cur')"
+        "'us-east-1', 250.75, 240.00, 220.66, 5000, 20, 'cur')"
     )
     conn.execute(
         "INSERT INTO daily_cost_summary VALUES "
         "('2025-01-16', '222222222222', 'AmazonEC2', "
-        "'us-west-2', 800.00, 750.00, 80, 30, 'cur')"
+        "'us-west-2', 800.00, 750.00, 704.00, 80, 30, 'cur')"
     )
     return conn
 
@@ -150,6 +150,10 @@ class TestCostExplorer:
                             "Amount": "1200.00",
                             "Unit": "USD",
                         },
+                        "NetAmortizedCost": {
+                            "Amount": "1100.00",
+                            "Unit": "USD",
+                        },
                     },
                 }
             ]
@@ -186,6 +190,7 @@ class TestCostExplorer:
                             "Metrics": {
                                 "UnblendedCost": {"Amount": "500"},
                                 "BlendedCost": {"Amount": "480"},
+                                "NetAmortizedCost": {"Amount": "440"},
                             },
                         },
                         {
@@ -193,6 +198,7 @@ class TestCostExplorer:
                             "Metrics": {
                                 "UnblendedCost": {"Amount": "100"},
                                 "BlendedCost": {"Amount": "95"},
+                                "NetAmortizedCost": {"Amount": "88"},
                             },
                         },
                     ],
@@ -230,6 +236,7 @@ class TestCostExplorer:
                     "Total": {
                         "UnblendedCost": {"Amount": "10", "Unit": "USD"},
                         "BlendedCost": {"Amount": "10", "Unit": "USD"},
+                        "NetAmortizedCost": {"Amount": "9", "Unit": "USD"},
                     },
                 }
             ]
@@ -412,14 +419,14 @@ class TestDetectCostAnomalies:
             conn.execute(
                 "INSERT INTO daily_cost_summary VALUES "
                 "(?, '111111111111', 'AmazonEC2', 'us-east-1', "
-                "100.0, 95.0, 50, 10, 'cur')",
+                "100.0, 95.0, 88.0, 50, 10, 'cur')",
                 [d],
             )
         # Today: spike to 500
         conn.execute(
             "INSERT INTO daily_cost_summary VALUES "
             "(?, '111111111111', 'AmazonEC2', 'us-east-1', "
-            "500.0, 480.0, 200, 40, 'cur')",
+            "500.0, 480.0, 440.0, 200, 40, 'cur')",
             [today],
         )
 
@@ -429,7 +436,7 @@ class TestDetectCostAnomalies:
             conn.execute(
                 "INSERT INTO daily_cost_summary VALUES "
                 "(?, '111111111111', 'AmazonS3', 'us-east-1', "
-                "20.0, 19.0, 1000, 5, 'cur')",
+                "20.0, 19.0, 17.6, 1000, 5, 'cur')",
                 [d],
             )
         return conn
@@ -485,7 +492,7 @@ class TestDetectCostAnomalies:
             conn.execute(
                 "INSERT INTO daily_cost_summary VALUES "
                 "(?, '111', 'AmazonEC2', 'us-east-1', "
-                "100.0, 95.0, 50, 10, 'cur')",
+                "100.0, 95.0, 88.0, 50, 10, 'cur')",
                 [d],
             )
         ctx = ToolContext(db_conn=conn, aws_region="us-east-1")
@@ -504,7 +511,7 @@ class TestDetectCostAnomalies:
         conn.execute(
             "INSERT INTO daily_cost_summary VALUES "
             "(?, '111', 'AmazonEC2', 'us-east-1', "
-            "100.0, 95.0, 50, 10, 'cur')",
+            "100.0, 95.0, 88.0, 50, 10, 'cur')",
             [datetime.now(timezone.utc).date()],
         )
         ctx = ToolContext(db_conn=conn, aws_region="us-east-1")
@@ -591,6 +598,7 @@ class TestIngestCostExplorerData:
                 product_code="AmazonEC2",
                 total_unblended_cost=100.0,
                 total_blended_cost=95.0,
+                total_net_amortized_cost=88.0,
             ),
         ]
         ctx = ToolContext(
