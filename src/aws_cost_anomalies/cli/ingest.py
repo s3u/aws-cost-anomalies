@@ -284,6 +284,7 @@ def _ingest_cost_explorer(
             "",  # region — CE 2-dim GroupBy limit
             r.total_unblended_cost,
             r.total_blended_cost,
+            r.total_net_amortized_cost,
             0.0,  # usage_amount
             0,  # line_item_count
         )
