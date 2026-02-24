@@ -1,7 +1,7 @@
 # AWS Cost Anomalies — Agent Guide
 
 ## Project Overview
-CLI tool to detect AWS cost anomalies across root and linked accounts. Downloads CUR (Cost & Usage Reports) from S3, stores in DuckDB, analyzes trends, detects anomalies with z-score, and supports natural language queries via an agentic system powered by AWS Bedrock.
+CLI tool to detect AWS cost anomalies across root and linked accounts. Ingests cost data from the Cost Explorer API or CUR (Cost & Usage Reports) from S3, stores in DuckDB, analyzes trends, detects anomalies using robust statistical methods (median/MAD z-scores, Theil-Sen drift), and supports natural language queries via an agentic system powered by AWS Bedrock.
 
 ## Quick Start
 ```bash
@@ -20,13 +20,13 @@ pytest
 - `src/aws_cost_anomalies/` — main package
   - `cli/` — Typer commands (ingest, trends, anomalies, query)
   - `config/` — YAML config loading
-  - `ingestion/` — S3 CUR download + parquet loading
+  - `ingestion/` — Cost Explorer client, S3 CUR download + parquet loading
   - `storage/` — DuckDB connection + schema
   - `analysis/` — trend aggregation + z-score anomaly detection
   - `agent/` — Bedrock-powered agentic system
     - `agent.py` — Agent loop: Bedrock Converse → tool dispatch → loop
     - `bedrock_client.py` — Boto3 bedrock-runtime wrapper
-    - `tools.py` — Tool definitions (DuckDB, Cost Explorer, CloudWatch, Budgets, Organizations)
+    - `tools.py` — Tool definitions (DuckDB, Cost Explorer, CloudWatch, Budgets, Organizations, anomaly detection, ingestion)
     - `executor.py` — SQL validation + safe execution
     - `prompts.py` — Agent system prompt + schema description
   - `utils/` — date helpers
@@ -34,18 +34,18 @@ pytest
 
 ## CLI Commands
 ```
-aws-cost-anomalies ingest    [--config] [--date YYYY-MM] [--full-refresh]
-aws-cost-anomalies trends    [--config] [--days 14] [--group-by service|account|region] [--top 10]
-aws-cost-anomalies anomalies [--config] [--days 14] [--sensitivity low|medium|high] [--group-by ...]
-aws-cost-anomalies query     [--config] [--interactive] "question text"
+uv run aws-cost-anomalies ingest    [--config] [--source cur|cost-explorer] [--date YYYY-MM] [--days N] [--full-refresh]
+uv run aws-cost-anomalies trends    [--config] [--days 14] [--group-by service|account|region] [--top 10] [--source ...]
+uv run aws-cost-anomalies anomalies [--config] [--days 14] [--sensitivity low|medium|high] [--group-by ...] [--source ...]
+uv run aws-cost-anomalies query     [--config] [--interactive] "question text"
 ```
 
 ## Key Architecture Decisions
 - **DuckDB** for embedded OLAP: no external database needed, fast aggregations
 - **Parquet-first**: CUR data loaded via DuckDB's `read_parquet()` with column mapping for both CUR v1 and v2 formats
 - **Incremental ingestion**: tracks `assemblyId` per billing period to avoid re-ingesting unchanged data
-- **Z-score anomaly detection**: modified z-score over rolling window with configurable sensitivity
-- **Agentic queries**: Bedrock Converse API with tool-use loop — agent can query DuckDB, Cost Explorer, CloudWatch, Budgets, and Organizations
+- **Robust anomaly detection**: median/MAD z-scores for point anomalies, Theil-Sen slope for gradual drift, with configurable sensitivity
+- **Agentic queries**: Bedrock Converse API with tool-use loop — agent can query DuckDB, Cost Explorer, CloudWatch, Budgets, Organizations, detect anomalies, and ingest data
 - **SQL safety**: agent executor validates all queries are read-only before execution
 
 ## Configuration

@@ -2,7 +2,7 @@
 
 ## Overview
 
-AWS Cost Anomalies is a Python CLI tool that ingests AWS Cost and Usage Report (CUR) data from S3, stores it in an embedded DuckDB database, detects cost anomalies using statistical methods, and supports natural language queries via an agentic system powered by AWS Bedrock. All output is terminal-only via Rich tables.
+AWS Cost Anomalies is a Python CLI tool that ingests AWS cost data from the Cost Explorer API or CUR (Cost & Usage Reports) from S3, stores it in an embedded DuckDB database, detects cost anomalies using robust statistical methods (median/MAD z-scores, Theil-Sen drift), and supports natural language queries via an agentic system powered by AWS Bedrock. All output is terminal-only via Rich tables.
 
 ---
 
@@ -41,6 +41,7 @@ src/aws_cost_anomalies/
 ├── config/
 │   └── settings.py       # YAML + env var config loader
 ├── ingestion/
+│   ├── cost_explorer.py  # Cost Explorer API client
 │   ├── s3_client.py      # S3 listing/downloading
 │   ├── manifest.py       # CUR manifest.json parser
 │   └── loader.py         # Parquet → DuckDB with column mapping
@@ -55,7 +56,8 @@ src/aws_cost_anomalies/
 │   ├── bedrock_client.py # Boto3 bedrock-runtime wrapper
 │   ├── tools.py          # Tool definitions + executors (DuckDB, CE, CW, Budgets, Orgs)
 │   ├── executor.py       # SQL validation + safe execution
-│   └── prompts.py        # Agent system prompt + schema description
+│   ├── prompts.py        # Agent system prompt + schema description
+│   └── mcp_bridge.py     # MCP server integration
 └── utils/
     └── dates.py          # Date range helpers
 ```
@@ -145,10 +147,12 @@ load_settings(config_path)
 | region | VARCHAR | AWS region |
 | total_unblended_cost | DOUBLE | Sum of unblended costs |
 | total_blended_cost | DOUBLE | Sum of blended costs |
+| total_net_amortized_cost | DOUBLE | Sum of net amortized costs (from CE: NetAmortizedCost; from CUR: net_unblended_cost) |
 | total_usage_amount | DOUBLE | Sum of usage amounts |
 | line_item_count | BIGINT | Number of line items |
+| data_source | VARCHAR | `'cur'` or `'cost_explorer'` |
 
-Rebuilt from `cost_line_items` during ingestion. **Excludes**: Tax, Fee, Credit, Refund, BundledDiscount line item types.
+Rebuilt from `cost_line_items` during CUR ingestion (preserves Cost Explorer rows). **Excludes**: Tax, Fee, Credit, Refund, BundledDiscount line item types.
 
 #### `ingestion_log` — Tracks ingested files
 
@@ -169,11 +173,12 @@ Rebuilt from `cost_line_items` during ingestion. **Excludes**: Tax, Fee, Credit,
 | idx_dcs_date | daily_cost_summary(usage_date) | Trend/anomaly queries |
 | idx_dcs_product | daily_cost_summary(product_code) | Group-by queries |
 | idx_dcs_account | daily_cost_summary(usage_account_id) | Group-by queries |
+| idx_dcs_source | daily_cost_summary(data_source) | Source filtering |
 | idx_il_period | ingestion_log(billing_period) | Incremental checks |
 
 ### `rebuild_daily_summary(conn)`
 
-Deletes all rows from `daily_cost_summary`, then re-aggregates from `cost_line_items` with `GROUP BY (date, account, service, region)`. Filters out non-usage line item types.
+Deletes CUR rows from `daily_cost_summary` (preserving Cost Explorer rows), then re-aggregates from `cost_line_items` with `GROUP BY (date, account, service, region)`. Filters out non-usage line item types.
 
 ---
 
@@ -181,10 +186,23 @@ Deletes all rows from `daily_cost_summary`, then re-aggregates from `cost_line_i
 
 **Files:** `ingestion/s3_client.py`, `ingestion/manifest.py`, `ingestion/loader.py`, `cli/ingest.py`
 
-### Flow
+### Cost Explorer Flow
 
 ```
-aws-cost-anomalies ingest [--date YYYY-MM] [--full-refresh]
+uv run aws-cost-anomalies ingest --source cost-explorer [--days N]
+  │
+  ├── 1. Load config, open DuckDB, create tables
+  ├── 2. Call ce:GetCostAndUsage (DAILY, grouped by SERVICE + LINKED_ACCOUNT)
+  │      Metrics: UnblendedCost, BlendedCost, NetAmortizedCost
+  ├── 3. Paginate, map CE service names → CUR product_code
+  ├── 4. Filter zero-cost entries (all three metrics < 0.001)
+  └── 5. insert_cost_explorer_summary() — replaces CE rows in date range, preserves CUR data
+```
+
+### CUR Flow
+
+```
+uv run aws-cost-anomalies ingest [--source cur] [--date YYYY-MM] [--full-refresh]
   │
   ├── 1. Load config, open DuckDB, create tables
   │
@@ -252,8 +270,11 @@ The loader reads the parquet schema via DuckDB's `parquet_schema()` function, ma
 
 **File:** `analysis/anomalies.py`
 
-### Algorithm: Modified Z-Score with Rolling Window
+### Algorithm: Median/MAD Z-Score + Theil-Sen Drift
 
+Two complementary techniques:
+
+**Point anomalies** (sudden spikes/drops):
 ```
 For each dimension group (service, account, or region):
   1. Query daily costs for last N days from daily_cost_summary
@@ -261,10 +282,20 @@ For each dimension group (service, account, or region):
   3. Baseline = all days except the most recent
   4. current_cost = most recent day's cost
   5. Skip if current_cost < min_daily_cost ($1 default)
-  6. z_score = (current_cost - mean(baseline)) / stddev(baseline)
-  7. Special case: zero variance → z_score = ±10.0 if cost differs
+  6. z_score = 0.6745 * (current_cost - median(baseline)) / MAD(baseline)
+  7. Special case: zero MAD → z_score = ±10.0 if cost differs
   8. Flag if |z_score| >= threshold
 ```
+
+**Trend anomalies** (gradual drift):
+```
+For groups with >= 5 data points:
+  1. Compute Theil-Sen slope over all days in the window
+  2. drift_pct = (slope * num_days) / median
+  3. Flag if |drift_pct| >= drift_threshold (default 20%)
+```
+
+See [ANOMALIES.md](ANOMALIES.md) for full details.
 
 ### Sensitivity Presets
 
@@ -335,11 +366,14 @@ run_agent(question, db_conn, model, region, on_step) → AgentResponse
 
 | Tool | AWS Client | Purpose |
 |------|-----------|---------|
-| `query_cost_database` | DuckDB | Query local CUR data via SQL |
-| `get_cost_explorer_data` | `ce` | Real-time cost data from AWS |
+| `query_cost_database` | DuckDB | Query local cost data via SQL |
+| `get_cost_explorer_data` | `ce` | Real-time cost data from AWS (unblended, blended, net amortized) |
 | `get_cloudwatch_metrics` | `cloudwatch` | Metrics and billing alarms |
 | `get_budget_info` | `budgets` | Budget vs actual spend |
 | `get_organization_info` | `organizations` | Account names and structure |
+| `detect_cost_anomalies` | DuckDB | Anomaly detection (median/MAD z-scores, Theil-Sen drift) |
+| `ingest_cost_explorer_data` | `ce` | Import Cost Explorer data into local DB |
+| `ingest_cur_data` | `s3` | Import CUR data from S3 into local DB |
 
 Tool errors are returned as results (not raised), so the agent can adapt and try alternative approaches.
 
@@ -383,18 +417,21 @@ All commands use the `--config` option to specify a YAML config file.
 ### `ingest`
 
 ```
-aws-cost-anomalies ingest [--config PATH] [--date YYYY-MM] [--full-refresh]
+uv run aws-cost-anomalies ingest [--config PATH] [--source cur|cost-explorer] [--date YYYY-MM] [--days N] [--full-refresh]
 ```
 
-- `--date YYYY-MM` — ingest a single billing month
-- `--full-refresh` — re-ingest all periods (ignores assembly_id cache)
+- `--source cost-explorer` — import from Cost Explorer API (no S3 needed)
+- `--source cur` — import CUR data from S3 (default if no `--source`)
+- `--days N` — lookback days for Cost Explorer (default from config)
+- `--date YYYY-MM` — ingest a single billing month (CUR only)
+- `--full-refresh` — re-ingest all periods (CUR only, ignores assembly_id cache)
 - Shows Rich progress bars during download/load
 - Reports skipped (already up-to-date) periods
 
 ### `trends`
 
 ```
-aws-cost-anomalies trends [--config PATH] [--days 14] [--group-by service|account|region] [--top 10]
+uv run aws-cost-anomalies trends [--config PATH] [--days 14] [--group-by service|account|region] [--top 10] [--source cur|cost-explorer]
 ```
 
 - Shows total daily cost table + grouped trend breakdown
@@ -403,8 +440,9 @@ aws-cost-anomalies trends [--config PATH] [--days 14] [--group-by service|accoun
 ### `anomalies`
 
 ```
-aws-cost-anomalies anomalies [--config PATH] [--days 14]
+uv run aws-cost-anomalies anomalies [--config PATH] [--days 14]
     [--sensitivity low|medium|high] [--group-by service|account|region]
+    [--source cur|cost-explorer] [--drift-threshold N]
 ```
 
 - Displays anomalies table with severity colors (critical=red, warning=yellow, info=cyan)
@@ -413,8 +451,8 @@ aws-cost-anomalies anomalies [--config PATH] [--days 14]
 ### `query`
 
 ```
-aws-cost-anomalies query [--config PATH] [--interactive] "question text"
-aws-cost-anomalies query --interactive  # REPL mode
+uv run aws-cost-anomalies query [--config PATH] [--interactive] "question text"
+uv run aws-cost-anomalies query --interactive  # REPL mode
 ```
 
 - Uses an agentic loop via Bedrock to answer questions using multiple tools

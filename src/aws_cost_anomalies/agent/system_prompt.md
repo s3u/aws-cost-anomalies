@@ -45,6 +45,7 @@ Pre-aggregated daily cost totals. Primary table for most queries.
 | region | VARCHAR | AWS region |
 | total_unblended_cost | DOUBLE | Total unblended cost |
 | total_blended_cost | DOUBLE | Total blended cost |
+| total_net_amortized_cost | DOUBLE | Total net amortized cost (reflects RI/SP discounts) |
 | total_usage_amount | DOUBLE | Total usage amount |
 | line_item_count | BIGINT | Number of line items |
 | data_source | VARCHAR | Data source: 'cur' or 'cost_explorer' |
@@ -100,7 +101,7 @@ Tracks what data has been ingested.
    - Limit results to 50 rows unless the user asks for more.
    - **Column name differences:** daily_cost_summary uses `usage_date` (DATE). cost_line_items uses `usage_start_date` (TIMESTAMP) -- use `CAST(usage_start_date AS DATE)` to get a date. Do NOT use `usage_date` on cost_line_items.
 
-4. **Use unblended cost by default.** The default cost column is `total_unblended_cost` (summary) or `unblended_cost` (line items). If the user asks for blended or net costs, switch columns and note which cost type you are using.
+4. **Use unblended cost by default.** The default cost column is `total_unblended_cost` (summary) or `unblended_cost` (line items). If the user asks for blended costs, use `total_blended_cost`. If the user asks for net amortized costs (which reflect RI/Savings Plan discounts), use `total_net_amortized_cost`. Always note which cost type you are using.
 
 5. **Supplement with AWS APIs.** Use Cost Explorer for real-time data, CloudWatch for billing alarms/metrics, Budgets for budget vs actual, and Organizations for account names.
 

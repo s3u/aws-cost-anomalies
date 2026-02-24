@@ -7,7 +7,7 @@ Detect cost anomalies across your AWS root and linked accounts. Ingests cost dat
 - **Dual Ingestion** — Import cost data from the Cost Explorer API (quick, no S3 setup) or CUR v1/v2 parquet files from S3 (full detail). Both sources coexist in the same database.
 - **Agent-Driven Workflow** — The agent can import data, query it, and call AWS APIs. On first run with an empty database, the agent offers to import Cost Explorer data automatically.
 - **Trend Analysis** — Daily cost trends grouped by service, account, or region with day-over-day changes
-- **Anomaly Detection** — Z-score based detection with configurable sensitivity and rolling windows
+- **Anomaly Detection** — Robust median/MAD z-scores for point anomalies and Theil-Sen slope for gradual drift, with configurable sensitivity and rolling windows
 - **Natural Language Queries** — Ask questions about your costs in plain English via an agentic system that uses DuckDB, Cost Explorer, CloudWatch, Budgets, and Organizations
 - **MCP Server Support** — Extend the agent with any [Model Context Protocol](https://modelcontextprotocol.io/) server (e.g. CloudTrail for "who launched that instance?")
 
@@ -124,23 +124,23 @@ The fastest way to get started is to use the agent — it will offer to import C
 
 ```bash
 # Start an interactive session — agent auto-detects empty DB
-aws-cost-anomalies query -i
+uv run aws-cost-anomalies query -i
 
 # Or import Cost Explorer data directly via CLI
-aws-cost-anomalies ingest --source cost-explorer --days 30
+uv run aws-cost-anomalies ingest --source cost-explorer --days 30
 ```
 
 ### Ingest Data
 
 ```bash
 # Import from Cost Explorer API (no S3 setup needed)
-aws-cost-anomalies ingest --source cost-explorer
-aws-cost-anomalies ingest --source cost-explorer --days 90
+uv run aws-cost-anomalies ingest --source cost-explorer
+uv run aws-cost-anomalies ingest --source cost-explorer --days 90
 
 # Import CUR data from S3 (requires S3 config)
-aws-cost-anomalies ingest
-aws-cost-anomalies ingest --source cur --date 2025-01
-aws-cost-anomalies ingest --source cur --full-refresh
+uv run aws-cost-anomalies ingest
+uv run aws-cost-anomalies ingest --source cur --date 2025-01
+uv run aws-cost-anomalies ingest --source cur --full-refresh
 ```
 
 Both sources coexist — ingesting one does not replace the other. The `daily_cost_summary` table has a `data_source` column (`'cur'` or `'cost_explorer'`) to distinguish them.
@@ -149,32 +149,32 @@ Both sources coexist — ingesting one does not replace the other. The `daily_co
 
 ```bash
 # Default: last 14 days, grouped by service, top 10
-aws-cost-anomalies trends
+uv run aws-cost-anomalies trends
 
 # Last 30 days, grouped by account, top 5
-aws-cost-anomalies trends --days 30 --group-by account --top 5
+uv run aws-cost-anomalies trends --days 30 --group-by account --top 5
 
 # Only Cost Explorer data
-aws-cost-anomalies trends --source cost-explorer
+uv run aws-cost-anomalies trends --source cost-explorer
 
 # Only CUR data
-aws-cost-anomalies trends --source cur
+uv run aws-cost-anomalies trends --source cur
 ```
 
 ### Detect Anomalies
 
 ```bash
 # Default: medium sensitivity, 14-day window, by service
-aws-cost-anomalies anomalies
+uv run aws-cost-anomalies anomalies
 
 # High sensitivity (lower threshold, catches more)
-aws-cost-anomalies anomalies --sensitivity high
+uv run aws-cost-anomalies anomalies --sensitivity high
 
 # Low sensitivity with specific data source
-aws-cost-anomalies anomalies --sensitivity low --days 30 --source cost-explorer
+uv run aws-cost-anomalies anomalies --sensitivity low --days 30 --source cost-explorer
 
 # Check by account
-aws-cost-anomalies anomalies --group-by account
+uv run aws-cost-anomalies anomalies --group-by account
 ```
 
 Sensitivity presets:
@@ -188,10 +188,10 @@ Requires AWS credentials with Bedrock access.
 
 ```bash
 # Ask a one-off question
-aws-cost-anomalies query "What are my top 5 most expensive services?"
+uv run aws-cost-anomalies query "What are my top 5 most expensive services?"
 
 # Interactive REPL mode
-aws-cost-anomalies query --interactive
+uv run aws-cost-anomalies query --interactive
 ```
 
 The agent can:
@@ -200,7 +200,7 @@ The agent can:
 - **Call AWS APIs** — Cost Explorer (real-time), CloudWatch, Budgets, Organizations
 - **Auto-bootstrap** — on first run with an empty DB, offers to import Cost Explorer data
 
-On first run with no data, the agent detects the empty database and offers to import Cost Explorer data from 2025-07-01 to present. No separate `ingest` step is required.
+On first run with no data, the agent detects the empty database and offers to import Cost Explorer data. No separate `ingest` step is required.
 
 #### MCP Server Integration
 
@@ -220,7 +220,7 @@ The tool supports two data sources that coexist in the same database:
 
 | Source | Setup | Detail Level |
 |--------|-------|-------------|
-| **Cost Explorer** | Just AWS credentials | Daily costs by service and account. No region, no usage amounts. |
+| **Cost Explorer** | Just AWS credentials | Daily costs by service and account (unblended, blended, net amortized). No region, no usage amounts. |
 | **CUR (S3)** | S3 bucket with CUR reports | Full detail: region, resource-level, usage types, line items. |
 
 The `daily_cost_summary` table has a `data_source` column to distinguish them. CLI commands accept `--source` to filter by source.
@@ -228,7 +228,7 @@ The `daily_cost_summary` table has a `data_source` column to distinguish them. C
 ### Ingestion
 
 **Cost Explorer path:**
-1. Calls `ce:GetCostAndUsage` with DAILY granularity, grouped by SERVICE and LINKED_ACCOUNT
+1. Calls `ce:GetCostAndUsage` with DAILY granularity, grouped by SERVICE and LINKED_ACCOUNT, fetching UnblendedCost, BlendedCost, and NetAmortizedCost
 2. Paginates through all results
 3. Maps CE service names to CUR product codes for consistency
 4. Replaces existing Cost Explorer rows in `daily_cost_summary` (CUR data is preserved)
@@ -243,18 +243,25 @@ The `daily_cost_summary` table has a `data_source` column to distinguish them. C
 
 ### Anomaly Detection
 
-Uses a modified z-score algorithm over a rolling window:
+Uses two complementary techniques over a rolling window:
 
+**Point anomalies** (sudden spikes/drops) — median/MAD modified z-scores:
 1. For each group (service/account/region), fetches daily costs for the last N days
-2. Uses all days except the most recent as the baseline
-3. Computes `z_score = (current_day - mean) / stddev` against the baseline
+2. Builds a baseline from all days except the most recent
+3. Computes a modified z-score using median and MAD (robust to baseline outliers)
 4. Flags anomalies where `|z_score|` exceeds the sensitivity threshold
 5. Classifies severity: critical (`|z| > 4`), warning (`|z| > 3`), info
+
+**Trend anomalies** (gradual drift) — Theil-Sen slope estimation:
+1. Computes the robust Theil-Sen slope over the full window
+2. Flags when total drift exceeds the drift threshold (default 20%)
+
+See [docs/ANOMALIES.md](docs/ANOMALIES.md) for full details.
 
 ### Data Schema
 
 - **cost_line_items** — Raw CUR data with normalized column names (21 cost/usage columns)
-- **daily_cost_summary** — Pre-aggregated daily totals by account, service, region, and data source
+- **daily_cost_summary** — Pre-aggregated daily totals by account, service, region, and data source (includes unblended, blended, and net amortized costs)
 - **ingestion_log** — Tracks ingested files for incremental updates
 
 ## Development
@@ -263,7 +270,7 @@ Uses a modified z-score algorithm over a rolling window:
 # Install dev dependencies
 uv sync --extra dev
 
-# Run unit tests (173 tests, evals excluded by default)
+# Run unit tests (209 tests, evals excluded by default)
 uv run pytest
 
 # Run with verbose output
@@ -278,7 +285,7 @@ uv run ruff check --fix src/ tests/
 
 ### Agent Correctness Evals
 
-The project includes 10 correctness evals that run the agent against a deterministic DuckDB fixture and assert the answers are **numerically correct** — not just keyword matches. These require live AWS Bedrock credentials.
+The project includes 13 correctness evals that run the agent against a deterministic DuckDB fixture and assert the answers are **numerically correct** — not just keyword matches. These require live AWS Bedrock credentials.
 
 ```bash
 # Run evals (requires Bedrock credentials)
@@ -299,7 +306,7 @@ Evals are excluded from the default `pytest` run via the `addopts = "-m 'not eva
 A script is provided to create 90 days of realistic CUR parquet data for local testing:
 
 ```bash
-uv run python scripts/generate_sample_data.py
+uv run scripts/generate_sample_data.py
 ```
 
 ### Project Structure
