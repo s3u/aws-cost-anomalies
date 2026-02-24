@@ -38,6 +38,21 @@ class TestValidateSQL:
         with pytest.raises(UnsafeSQLError):
             validate_sql("CREATE TABLE evil (x INT)")
 
+    def test_allows_line_comment_before_select(self):
+        sql = "-- DAILY COST TRENDS\nSELECT * FROM daily_cost_summary"
+        result = validate_sql(sql)
+        assert result == sql.rstrip(";")
+
+    def test_allows_block_comment_before_select(self):
+        sql = "/* overview */ SELECT 1"
+        result = validate_sql(sql)
+        assert result == sql
+
+    def test_allows_multiple_comments_before_select(self):
+        sql = "-- line1\n-- line2\nSELECT 1"
+        result = validate_sql(sql)
+        assert result == sql
+
     def test_rejects_non_select(self):
         with pytest.raises(UnsafeSQLError, match="Only SELECT and WITH"):
             validate_sql("SHOW TABLES")

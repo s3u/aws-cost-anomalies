@@ -50,8 +50,23 @@ def validate_sql(sql: str) -> str:
     if ";" in cleaned:
         raise UnsafeSQLError("Multi-statement queries are not allowed.")
 
+    # Strip leading SQL comments before checking the first keyword.
+    # Models sometimes prefix queries with "-- label" comments.
+    prefix = cleaned
+    while prefix:
+        if prefix.startswith("--"):
+            # Line comment — skip to next line
+            newline = prefix.find("\n")
+            prefix = prefix[newline + 1:].lstrip() if newline != -1 else ""
+        elif prefix.startswith("/*"):
+            # Block comment — skip to closing */
+            end = prefix.find("*/")
+            prefix = prefix[end + 2:].lstrip() if end != -1 else ""
+        else:
+            break
+
     # Must start with SELECT or WITH (CTEs)
-    upper = cleaned.upper()
+    upper = prefix.upper()
     if not (upper.startswith("SELECT") or upper.startswith("WITH")):
         raise UnsafeSQLError(
             "Only SELECT and WITH (CTE) queries are allowed. "
