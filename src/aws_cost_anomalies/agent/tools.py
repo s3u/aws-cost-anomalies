@@ -267,6 +267,59 @@ INGEST_CUR_DATA_SPEC: dict = {
 }
 
 
+DETECT_COST_ANOMALIES_SPEC: dict = {
+    "toolSpec": {
+        "name": "detect_cost_anomalies",
+        "description": (
+            "Detect cost anomalies in the local database using "
+            "robust statistical methods (median/MAD z-scores for "
+            "point anomalies, Theil-Sen slope for gradual drift). "
+            "Returns detected anomalies with severity, direction, "
+            "and statistical details. Use this when the user asks "
+            "about unusual spending, cost spikes, or anomalies."
+        ),
+        "inputSchema": {
+            "json": {
+                "type": "object",
+                "properties": {
+                    "days": {
+                        "type": "integer",
+                        "description": (
+                            "Rolling window size in days. Default 14."
+                        ),
+                    },
+                    "sensitivity": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                        "description": (
+                            "Detection sensitivity: low (z>3), "
+                            "medium (z>2.5), high (z>2). Default medium."
+                        ),
+                    },
+                    "group_by": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "product_code",
+                                "usage_account_id",
+                                "region",
+                            ],
+                        },
+                        "description": (
+                            "Dimensions to group by. Default "
+                            "['product_code']. Use multiple for "
+                            "drill-down (e.g. service + account)."
+                        ),
+                    },
+                },
+                "required": [],
+            }
+        },
+    }
+}
+
+
 # ---------------------------------------------------------------------------
 # Tool registry
 # ---------------------------------------------------------------------------
@@ -277,6 +330,7 @@ TOOL_DEFINITIONS: list[dict] = [
     CLOUDWATCH_SPEC,
     BUDGET_SPEC,
     ORGANIZATION_SPEC,
+    DETECT_COST_ANOMALIES_SPEC,
     INGEST_COST_EXPLORER_SPEC,
     INGEST_CUR_DATA_SPEC,
 ]
@@ -759,6 +813,76 @@ def _execute_ingest_cur_data(
     return result
 
 
+def _execute_detect_cost_anomalies(
+    tool_input: dict, context: ToolContext
+) -> dict:
+    """Run anomaly detection on the local database."""
+    from aws_cost_anomalies.analysis.anomalies import detect_anomalies
+
+    # Use config defaults if available, allow tool_input to override
+    default_days = 14
+    default_sensitivity = "medium"
+    drift_threshold = 0.20
+    if context.settings:
+        default_days = context.settings.anomaly.rolling_window_days
+        drift_threshold = context.settings.anomaly.drift_threshold_pct / 100.0
+        # Map z_score_threshold to sensitivity label
+        z_thresh = context.settings.anomaly.z_score_threshold
+        if z_thresh >= 3.0:
+            default_sensitivity = "low"
+        elif z_thresh >= 2.5:
+            default_sensitivity = "medium"
+        else:
+            default_sensitivity = "high"
+
+    days = tool_input.get("days", default_days)
+    sensitivity = tool_input.get("sensitivity", default_sensitivity)
+    group_by = tool_input.get("group_by", ["product_code"])
+
+    try:
+        anomalies = detect_anomalies(
+            context.db_conn,
+            days=days,
+            group_by=group_by,
+            sensitivity=sensitivity,
+            drift_threshold=drift_threshold,
+        )
+    except ValueError as e:
+        return {"error": str(e)}
+
+    results = []
+    for a in anomalies:
+        entry: dict[str, Any] = {
+            "usage_date": str(a.usage_date),
+            "group_by": a.group_by,
+            "group_value": a.group_value,
+            "current_cost": round(a.current_cost, 2),
+            "median_cost": round(a.median_cost, 2),
+            "mad": round(a.mad, 4),
+            "z_score": round(a.z_score, 2),
+            "severity": a.severity,
+            "direction": a.direction,
+            "kind": a.kind,
+        }
+        if a.kind == "trend":
+            entry["drift_pct"] = round(a.z_score * 100, 1)
+        results.append(entry)
+
+    return {
+        "anomaly_count": len(results),
+        "anomalies": results,
+        "parameters": {
+            "days": days,
+            "sensitivity": sensitivity,
+            "group_by": group_by,
+        },
+        "summary": (
+            f"{len(results)} anomalies detected over the last "
+            f"{days} days (sensitivity={sensitivity})."
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Executor registry and dispatch
 # ---------------------------------------------------------------------------
@@ -769,6 +893,7 @@ _EXECUTORS: dict[str, Callable[[dict, ToolContext], dict]] = {
     "get_cloudwatch_metrics": _execute_cloudwatch,
     "get_budget_info": _execute_budget_info,
     "get_organization_info": _execute_organization_info,
+    "detect_cost_anomalies": _execute_detect_cost_anomalies,
     "ingest_cost_explorer_data": _execute_ingest_cost_explorer,
     "ingest_cur_data": _execute_ingest_cur_data,
 }

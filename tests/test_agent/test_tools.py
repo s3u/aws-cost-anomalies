@@ -45,7 +45,7 @@ def context(db_conn):
 
 class TestToolDefinitions:
     def test_all_tools_have_spec(self):
-        assert len(TOOL_DEFINITIONS) == 7
+        assert len(TOOL_DEFINITIONS) == 8
         for defn in TOOL_DEFINITIONS:
             assert "toolSpec" in defn
             spec = defn["toolSpec"]
@@ -61,6 +61,7 @@ class TestToolDefinitions:
             "get_cloudwatch_metrics",
             "get_budget_info",
             "get_organization_info",
+            "detect_cost_anomalies",
             "ingest_cost_explorer_data",
             "ingest_cur_data",
         }
@@ -391,6 +392,168 @@ class TestOrganizationInfo:
 
         assert "error" not in result
         assert result["account"]["name"] == "Production"
+
+
+class TestDetectCostAnomalies:
+    """Tests for the detect_cost_anomalies tool executor."""
+
+    @pytest.fixture
+    def anomaly_db(self):
+        """DB with enough data to trigger anomaly detection."""
+        from datetime import datetime, timedelta, timezone
+
+        conn = duckdb.connect(":memory:")
+        create_tables(conn)
+
+        # 13 days of stable EC2 costs (~100/day), then a spike on day 14
+        today = datetime.now(timezone.utc).date()
+        for i in range(13, 0, -1):
+            d = today - timedelta(days=i)
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonEC2', 'us-east-1', "
+                "100.0, 95.0, 50, 10, 'cur')",
+                [d],
+            )
+        # Today: spike to 500
+        conn.execute(
+            "INSERT INTO daily_cost_summary VALUES "
+            "(?, '111111111111', 'AmazonEC2', 'us-east-1', "
+            "500.0, 480.0, 200, 40, 'cur')",
+            [today],
+        )
+
+        # 14 days of stable S3 costs (~20/day), no anomaly
+        for i in range(13, -1, -1):
+            d = today - timedelta(days=i)
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonS3', 'us-east-1', "
+                "20.0, 19.0, 1000, 5, 'cur')",
+                [d],
+            )
+        return conn
+
+    @pytest.fixture
+    def anomaly_context(self, anomaly_db):
+        return ToolContext(db_conn=anomaly_db, aws_region="us-east-1")
+
+    def test_detects_spike(self, anomaly_context):
+        result = execute_tool(
+            "detect_cost_anomalies",
+            {"days": 14, "sensitivity": "medium"},
+            anomaly_context,
+        )
+        assert "error" not in result
+        assert result["anomaly_count"] >= 1
+        # The EC2 spike should be detected
+        ec2_anomalies = [
+            a for a in result["anomalies"]
+            if a["group_value"] == "AmazonEC2"
+            and a["kind"] == "point"
+        ]
+        assert len(ec2_anomalies) == 1
+        assert ec2_anomalies[0]["direction"] == "spike"
+        assert ec2_anomalies[0]["current_cost"] == 500.0
+
+    def test_returns_summary(self, anomaly_context):
+        result = execute_tool(
+            "detect_cost_anomalies", {}, anomaly_context
+        )
+        assert "summary" in result
+        assert "anomalies detected" in result["summary"]
+
+    def test_returns_parameters(self, anomaly_context):
+        result = execute_tool(
+            "detect_cost_anomalies",
+            {"days": 7, "sensitivity": "high", "group_by": ["product_code"]},
+            anomaly_context,
+        )
+        assert result["parameters"]["days"] == 7
+        assert result["parameters"]["sensitivity"] == "high"
+        assert result["parameters"]["group_by"] == ["product_code"]
+
+    def test_no_anomalies_in_stable_data(self):
+        """Stable costs should produce no point anomalies."""
+        from datetime import datetime, timedelta, timezone
+
+        conn = duckdb.connect(":memory:")
+        create_tables(conn)
+        today = datetime.now(timezone.utc).date()
+        for i in range(13, -1, -1):
+            d = today - timedelta(days=i)
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111', 'AmazonEC2', 'us-east-1', "
+                "100.0, 95.0, 50, 10, 'cur')",
+                [d],
+            )
+        ctx = ToolContext(db_conn=conn, aws_region="us-east-1")
+        result = execute_tool("detect_cost_anomalies", {}, ctx)
+        point_anomalies = [
+            a for a in result["anomalies"] if a["kind"] == "point"
+        ]
+        assert len(point_anomalies) == 0
+
+    def test_insufficient_data(self):
+        """Fewer than 3 days should produce no anomalies."""
+        from datetime import datetime, timezone
+
+        conn = duckdb.connect(":memory:")
+        create_tables(conn)
+        conn.execute(
+            "INSERT INTO daily_cost_summary VALUES "
+            "(?, '111', 'AmazonEC2', 'us-east-1', "
+            "100.0, 95.0, 50, 10, 'cur')",
+            [datetime.now(timezone.utc).date()],
+        )
+        ctx = ToolContext(db_conn=conn, aws_region="us-east-1")
+        result = execute_tool("detect_cost_anomalies", {}, ctx)
+        assert result["anomaly_count"] == 0
+
+    def test_invalid_group_by(self, anomaly_context):
+        result = execute_tool(
+            "detect_cost_anomalies",
+            {"group_by": ["invalid_column"]},
+            anomaly_context,
+        )
+        assert "error" in result
+
+    def test_multi_group_by(self, anomaly_context):
+        result = execute_tool(
+            "detect_cost_anomalies",
+            {"group_by": ["product_code", "usage_account_id"]},
+            anomaly_context,
+        )
+        assert "error" not in result
+        assert result["parameters"]["group_by"] == [
+            "product_code",
+            "usage_account_id",
+        ]
+
+    def test_honours_config_defaults(self, anomaly_db):
+        from aws_cost_anomalies.config.settings import (
+            AnomalyConfig,
+            Settings,
+        )
+
+        settings = Settings(
+            anomaly=AnomalyConfig(
+                rolling_window_days=7,
+                z_score_threshold=3.0,
+                min_daily_cost=5.0,
+                drift_threshold_pct=30.0,
+            )
+        )
+        ctx = ToolContext(
+            db_conn=anomaly_db,
+            aws_region="us-east-1",
+            settings=settings,
+        )
+        # No explicit params — should use config defaults
+        result = execute_tool("detect_cost_anomalies", {}, ctx)
+        assert result["parameters"]["days"] == 7
+        assert result["parameters"]["sensitivity"] == "low"
 
 
 class TestIngestCostExplorerData:

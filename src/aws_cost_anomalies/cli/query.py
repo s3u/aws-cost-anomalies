@@ -28,6 +28,7 @@ _TOOL_LABELS: dict[str, str] = {
     "get_cloudwatch_metrics": "Checking CloudWatch metrics",
     "get_budget_info": "Retrieving budget info",
     "get_organization_info": "Looking up organization accounts",
+    "detect_cost_anomalies": "Detecting cost anomalies",
     "ingest_cost_explorer_data": "Importing Cost Explorer data",
     "ingest_cur_data": "Importing CUR data from S3",
 }
@@ -109,6 +110,10 @@ def _run_question(
     Returns the updated conversation messages for multi-turn
     context, or None on error.
     """
+    def _on_text(text: str) -> None:
+        """Display intermediate text (plan summaries) from the agent."""
+        console.print(f"\n[italic]{text}[/italic]")
+
     console.print(f"\n[dim]Thinking...[/dim]")
     try:
         response = run_agent(
@@ -119,6 +124,7 @@ def _run_question(
             max_tokens=max_tokens,
             max_iterations=max_iterations,
             on_step=_make_step_callback(verbose),
+            on_text=_on_text,
             history=history,
             mcp_bridge=mcp_bridge,
             settings=settings,

@@ -57,6 +57,7 @@ def run_agent(
     max_tokens: int = 4096,
     max_iterations: int = 10,
     on_step: Callable[[AgentStep], None] | None = None,  # noqa: E501 — called before (result=None) and after each tool
+    on_text: Callable[[str], None] | None = None,  # noqa: E501 — called for intermediate text (e.g. plan summary) in tool_use turns
     history: list[dict] | None = None,
     mcp_bridge: MCPBridge | None = None,
     settings: Settings | None = None,
@@ -77,6 +78,8 @@ def run_agent(
         max_iterations: Safety limit on agent loop iterations.
         on_step: Optional callback invoked before (tool_result=None)
             and after (tool_result set) each tool execution.
+        on_text: Optional callback invoked for intermediate text blocks
+            that appear alongside tool calls (e.g. plan summaries).
         history: Prior conversation messages for multi-turn context.
         settings: Application settings (for ingestion tools).
         bedrock_profile: Named AWS profile for Bedrock API calls.
@@ -173,6 +176,12 @@ def run_agent(
 
         # If tool_use, execute each tool call
         if stop_reason == "tool_use":
+            # Surface any text blocks (e.g. plan summary) before tools
+            if on_text:
+                for block in assistant_message.get("content", []):
+                    if "text" in block and block["text"].strip():
+                        on_text(block["text"])
+
             tool_results: list[dict] = []
 
             for block in assistant_message.get("content", []):

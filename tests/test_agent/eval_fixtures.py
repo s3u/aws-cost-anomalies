@@ -8,7 +8,7 @@ reference values for assertions.
 from __future__ import annotations
 
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import duckdb
 import pytest
@@ -218,6 +218,116 @@ def assert_cost_in_answer(
         f"but found amounts: {['${:,.2f}'.format(a) for a in amounts]}\n"
         f"Answer: {response.answer[:500]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Recent data fixtures (for anomaly detection evals)
+# ---------------------------------------------------------------------------
+
+SPIKE_SERVICE = "AmazonEC2"
+SPIKE_ACCOUNT = "111111111111"
+SPIKE_MULTIPLIER = 5.0
+
+# Normal daily EC2 across all accounts and regions:
+#   111: 150, 222: 60, 333: 25 → total $235/day
+# Spike day: account 111 EC2 at 5× ($750), others normal → total $835
+NORMAL_DAILY_EC2 = sum(
+    _BASE_COSTS[(a, "AmazonEC2")] for a in ACCOUNTS
+)
+SPIKE_DAY_EC2 = (
+    _BASE_COSTS[(SPIKE_ACCOUNT, SPIKE_SERVICE)] * SPIKE_MULTIPLIER
+    + sum(
+        _BASE_COSTS[(a, SPIKE_SERVICE)]
+        for a in ACCOUNTS
+        if a != SPIKE_ACCOUNT
+    )
+)
+
+
+def _build_recent_rows(
+    days: int = 14,
+    spike_service: str | None = None,
+    spike_account: str | None = None,
+    spike_multiplier: float = 1.0,
+) -> list[tuple]:
+    """Generate recent cost rows for anomaly detection evals.
+
+    Data ends on date.today(), with an optional cost spike on the final day
+    for the given service/account.
+    """
+    today = datetime.now(timezone.utc).date()
+    rows = []
+    for day_offset in range(days - 1, -1, -1):
+        usage_date = today - timedelta(days=day_offset)
+        is_last_day = day_offset == 0
+        for acct in ACCOUNTS:
+            for svc in SERVICES:
+                base = _BASE_COSTS[(acct, svc)]
+                multiplier = 1.0
+                if (
+                    is_last_day
+                    and spike_service
+                    and svc == spike_service
+                    and (spike_account is None or acct == spike_account)
+                ):
+                    multiplier = spike_multiplier
+                for region in REGIONS:
+                    cost = round(base * _REGION_WEIGHTS[region] * multiplier, 2)
+                    rows.append((
+                        usage_date, acct, svc, region,
+                        cost, cost * 0.95, cost * 10, 1,
+                    ))
+    return rows
+
+
+@pytest.fixture
+def eval_db_recent() -> duckdb.DuckDBPyConnection:
+    """In-memory DuckDB with 14 days of flat recent cost data.
+
+    All costs are constant — no anomalies should be detected.
+    """
+    conn = get_connection(":memory:")
+    create_tables(conn)
+    conn.executemany(
+        """INSERT INTO daily_cost_summary
+           (usage_date, usage_account_id, product_code, region,
+            total_unblended_cost, total_blended_cost,
+            total_usage_amount, line_item_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        _build_recent_rows(days=14),
+    )
+    return conn
+
+
+@pytest.fixture
+def eval_db_with_spike() -> duckdb.DuckDBPyConnection:
+    """In-memory DuckDB with 14 days of cost data and an EC2 spike on the last day.
+
+    Account 111111111111 EC2 costs jump 5× on the final day (today),
+    producing a critical point anomaly (z-score = 10.0 due to zero-MAD
+    edge case on constant baseline).
+    """
+    conn = get_connection(":memory:")
+    create_tables(conn)
+    conn.executemany(
+        """INSERT INTO daily_cost_summary
+           (usage_date, usage_account_id, product_code, region,
+            total_unblended_cost, total_blended_cost,
+            total_usage_amount, line_item_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        _build_recent_rows(
+            days=14,
+            spike_service=SPIKE_SERVICE,
+            spike_account=SPIKE_ACCOUNT,
+            spike_multiplier=SPIKE_MULTIPLIER,
+        ),
+    )
+    return conn
+
+
+# ---------------------------------------------------------------------------
+# Assertion helpers
+# ---------------------------------------------------------------------------
 
 
 def assert_ranking(response: AgentResponse, *ordered_items: str) -> None:

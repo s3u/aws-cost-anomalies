@@ -25,6 +25,8 @@ from .eval_fixtures import (
     REGION_TOTALS,
     SERVICE_TOTALS,
     SERVICES,
+    SPIKE_ACCOUNT,
+    SPIKE_SERVICE,
     TOTAL_COST,
     assert_answer_contains,
     assert_cost_in_answer,
@@ -32,10 +34,12 @@ from .eval_fixtures import (
     assert_used_tool,
     assert_valid_response,
     eval_db,  # noqa: F401 — pytest fixture import
+    eval_db_recent,  # noqa: F401
+    eval_db_with_spike,  # noqa: F401
 )
 
-# Re-export fixture so pytest discovers it in this module
-__all__ = ["eval_db"]
+# Re-export fixtures so pytest discovers them in this module
+__all__ = ["eval_db", "eval_db_recent", "eval_db_with_spike"]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -451,3 +455,125 @@ class TestCrossCheck:
         # At least the top 2 individual service totals should be correct
         assert_cost_in_answer(response, SERVICE_TOTALS["AmazonEC2"])
         assert_cost_in_answer(response, SERVICE_TOTALS["AmazonRDS"])
+
+
+# ============================================================================
+# Eval 11: No Anomalies (flat recent data)
+# ============================================================================
+
+
+@pytest.mark.evals
+class TestNoAnomalies:
+    """Verify the agent uses detect_cost_anomalies and reports nothing on flat data."""
+
+    def test_no_anomalies(self, eval_db_recent):  # noqa: F811
+        """Flat costs should produce no anomalies; agent must not invent any."""
+        response = _run("Are there any cost anomalies?", eval_db_recent)
+
+        assert_valid_response(response)
+        assert_used_tool(response, "detect_cost_anomalies")
+
+        # Agent should indicate no anomalies found
+        answer_lower = response.answer.lower()
+        no_anomaly_indicators = [
+            "no anomal",
+            "no cost anomal",
+            "no significant",
+            "no unusual",
+            "not detect",
+            "not find",
+            "not identify",
+            "didn't detect",
+            "didn't find",
+            "didn't identify",
+            "none detected",
+            "none found",
+            "none identified",
+            "no spike",
+            "no drift",
+            "0 anomal",
+            "zero anomal",
+            "stable",
+            "normal",
+            "no issues",
+        ]
+        has_no_anomaly = any(ind in answer_lower for ind in no_anomaly_indicators)
+        assert has_no_anomaly, (
+            f"Expected agent to report no anomalies on flat data.\n"
+            f"Answer: {response.answer[:500]}"
+        )
+
+
+# ============================================================================
+# Eval 12: Spike Detection
+# ============================================================================
+
+
+@pytest.mark.evals
+class TestSpikeDetection:
+    """Verify the agent detects a cost spike and names the correct service."""
+
+    def test_detects_ec2_spike(self, eval_db_with_spike):  # noqa: F811
+        """EC2 spike on the last day should be detected as a critical anomaly."""
+        response = _run(
+            "Are there any cost anomalies?", eval_db_with_spike
+        )
+
+        assert_valid_response(response)
+        assert_used_tool(response, "detect_cost_anomalies")
+
+        # Must mention EC2 as the anomalous service
+        answer_lower = response.answer.lower()
+        assert "ec2" in answer_lower, (
+            f"Expected 'EC2' in anomaly answer.\n"
+            f"Answer: {response.answer[:500]}"
+        )
+
+        # Must describe it as a spike, increase, or anomaly
+        spike_indicators = [
+            "spike",
+            "spik",
+            "surge",
+            "increase",
+            "jump",
+            "anomal",
+            "unusual",
+            "critical",
+            "higher",
+            "elevated",
+            "above",
+        ]
+        has_spike_language = any(ind in answer_lower for ind in spike_indicators)
+        assert has_spike_language, (
+            f"Expected spike/anomaly language about EC2.\n"
+            f"Answer: {response.answer[:500]}"
+        )
+
+
+# ============================================================================
+# Eval 13: Anomaly Drilldown (identify responsible account)
+# ============================================================================
+
+
+@pytest.mark.evals
+class TestAnomalyDrilldown:
+    """Verify the agent can identify which account caused the anomaly."""
+
+    def test_identifies_responsible_account(self, eval_db_with_spike):  # noqa: F811
+        """Agent should detect the EC2 spike and attribute it to account 111."""
+        response = _run(
+            "Are there any cost anomalies? If so, which account is responsible?",
+            eval_db_with_spike,
+        )
+
+        assert_valid_response(response)
+        assert_used_tool(response, "detect_cost_anomalies")
+
+        # Must mention the spiking service
+        assert_answer_contains(response, "EC2")
+
+        # Must identify the responsible account
+        assert SPIKE_ACCOUNT in response.answer, (
+            f"Expected account {SPIKE_ACCOUNT} identified as responsible.\n"
+            f"Answer: {response.answer[:500]}"
+        )
