@@ -109,12 +109,11 @@ def _validate_mapped_columns(
     return warnings
 
 
-def build_select_clause(
-    parquet_columns: list[str], source_file: str
-) -> str:
+def build_select_clause(parquet_columns: list[str]) -> str:
     """Build a SELECT clause mapping parquet to normalized names.
 
     Columns not found in the source are filled with NULL.
+    The _source_file column uses a positional parameter (?).
     """
     version = detect_cur_version(parquet_columns)
     col_map = (
@@ -159,8 +158,7 @@ def build_select_clause(
             select_parts.append(f"NULL AS {target_col}")
 
     select_parts.append("current_timestamp AS _ingested_at")
-    escaped_source = source_file.replace("'", "''")
-    select_parts.append(f"'{escaped_source}' AS _source_file")
+    select_parts.append("? AS _source_file")
 
     return ", ".join(select_parts)
 
@@ -222,16 +220,14 @@ def load_parquet_file(
             ", ".join(sorted(missing)),
         )
 
-    select_clause = build_select_clause(
-        parquet_columns, source_file
-    )
+    select_clause = build_select_clause(parquet_columns)
 
     file_str = str(file_path)
     result = conn.execute(
         f"INSERT INTO cost_line_items"
         f" SELECT {select_clause}"
         f" FROM read_parquet(?)",
-        [file_str],
+        [source_file, file_str],
     )
 
     row_count = result.fetchone()

@@ -634,6 +634,16 @@ def _execute_ingest_cost_explorer(
     if not start or not end:
         return {"error": "start_date and end_date are required."}
 
+    # Validate date format and logical order
+    try:
+        from datetime import date as _date
+        start_d = _date.fromisoformat(start)
+        end_d = _date.fromisoformat(end)
+    except ValueError:
+        return {"error": f"Invalid date format. Use YYYY-MM-DD. Got start='{start}', end='{end}'."}
+    if start_d >= end_d:
+        return {"error": f"start_date ({start}) must be before end_date ({end})."}
+
     ce_region = "us-east-1"
     if context.settings and context.settings.cost_explorer:
         ce_region = context.settings.cost_explorer.region
@@ -794,11 +804,18 @@ def _execute_ingest_cur_data(
                     rows,
                 )
                 total_rows += rows
-            except Exception as e:
+            except (S3Error, ValueError, OSError) as e:
                 errors.append(
                     {"key": s3_key, "error": str(e)}
                 )
                 continue
+
+    if total_rows == 0 and errors:
+        return {
+            "error": "All files failed to load.",
+            "errors": errors,
+            "source": "cur",
+        }
 
     summary_rows = rebuild_daily_summary(context.db_conn)
 

@@ -205,7 +205,10 @@ class MCPBridge:
 
 def _mcp_tool_to_bedrock_spec(prefixed_name: str, tool: MCPTool) -> dict:
     """Convert an MCP Tool to a Bedrock Converse toolSpec dict."""
-    input_schema = tool.inputSchema if tool.inputSchema else {"type": "object", "properties": {}}
+    input_schema = tool.inputSchema if tool.inputSchema else {}
+    # Bedrock Converse requires root schema to be type: "object"
+    if not isinstance(input_schema, dict) or input_schema.get("type") != "object":
+        input_schema = {"type": "object", "properties": {}}
     return {
         "toolSpec": {
             "name": prefixed_name,

@@ -21,12 +21,12 @@ class BedrockClient:
             self.client = aws_session(profile).client(
                 "bedrock-runtime", region_name=region
             )
-        except NoCredentialsError:
+        except NoCredentialsError as e:
             raise BedrockError(
                 "AWS credentials not found. Configure credentials "
                 "via AWS_PROFILE, environment variables, or "
                 "~/.aws/credentials."
-            )
+            ) from e
 
     def converse(
         self,
@@ -53,12 +53,12 @@ class BedrockClient:
 
         try:
             return self.client.converse(**kwargs)
-        except NoCredentialsError:
+        except NoCredentialsError as e:
             raise BedrockError(
                 "AWS credentials not found. Configure credentials "
                 "via AWS_PROFILE, environment variables, or "
                 "~/.aws/credentials."
-            )
+            ) from e
         except ClientError as e:
             code = e.response["Error"]["Code"]
             message = e.response["Error"]["Message"]
@@ -70,41 +70,41 @@ class BedrockClient:
                     "bedrock:InvokeModel permission and the model "
                     "is enabled in your AWS account. "
                     f"Details: {message}"
-                )
+                ) from e
 
             if code == "ResourceNotFoundException":
                 raise BedrockError(
                     f"Bedrock model '{model_id}' not found. "
                     "Check the model ID in your config and ensure "
                     "the model is available in your region."
-                )
+                ) from e
 
             if code == "ThrottlingException":
                 raise BedrockError(
                     "Bedrock API rate limit reached. "
                     "Please wait a moment and try again."
-                )
+                ) from e
 
             if code == "ServiceQuotaExceededException":
                 raise BedrockError(
                     "Bedrock service quota exceeded. "
                     "Request a quota increase in the AWS console "
                     "or try again later."
-                )
+                ) from e
 
             if code == "ValidationException":
                 raise BedrockError(
                     f"Bedrock request validation error: {message}"
-                )
+                ) from e
 
             raise BedrockError(
                 f"Bedrock API error ({code}): {message}"
-            )
+            ) from e
         except Exception as e:
             if "Could not connect" in str(e) or "EndpointConnectionError" in type(e).__name__:
                 raise BedrockError(
                     "Could not connect to Bedrock API. "
                     "Check your internet connection and "
                     "AWS region configuration."
-                )
-            raise BedrockError(f"Unexpected Bedrock error: {e}")
+                ) from e
+            raise BedrockError(f"Unexpected Bedrock error: {e}") from e

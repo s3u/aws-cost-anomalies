@@ -88,10 +88,11 @@ def test_detect_cur_version_v2():
 
 def test_build_select_clause_v2():
     columns = ["identity_line_item_id", "line_item_unblended_cost", "line_item_usage_account_id"]
-    clause = build_select_clause(columns, "test.parquet")
+    clause = build_select_clause(columns)
     assert "identity_line_item_id" in clause
     assert "line_item_unblended_cost" in clause
-    assert "test.parquet" in clause
+    # _source_file is now a parameterized placeholder
+    assert "? AS _source_file" in clause
 
 
 def test_load_parquet_v2():

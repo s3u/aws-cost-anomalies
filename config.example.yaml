@@ -23,6 +23,7 @@ anomaly:
   rolling_window_days: 14         # Days of history for baseline
   z_score_threshold: 2.5          # Default z-score threshold (overridden by --sensitivity)
   min_daily_cost: 1.0             # Ignore groups with daily cost below this
+  drift_threshold_pct: 20.0       # Gradual drift threshold in percent (20.0 = 20%)
 
 agent:
   model: "us.anthropic.claude-sonnet-4-20250514-v1:0"  # Bedrock model ID

@@ -48,9 +48,9 @@ def classify_severity(z_score: float) -> str:
     return "info"
 
 
-def _classify_drift_severity(drift_pct: float) -> str:
-    """Classify drift severity based on absolute drift percentage."""
-    abs_drift = abs(drift_pct)
+def _classify_drift_severity(drift_fraction: float) -> str:
+    """Classify drift severity based on absolute drift fraction (1.0 = 100%)."""
+    abs_drift = abs(drift_fraction)
     if abs_drift > 1.0:
         return "critical"
     elif abs_drift > 0.5:

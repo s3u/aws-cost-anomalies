@@ -90,9 +90,9 @@ _INDEXES = [
     ),
 ]
 
-_EXCLUDED_LINE_ITEM_TYPES = (
-    "'Tax', 'Fee', 'Credit', 'Refund', 'BundledDiscount'"
-)
+_EXCLUDED_LINE_ITEM_TYPES = [
+    "Tax", "Fee", "Credit", "Refund", "BundledDiscount",
+]
 
 
 def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
@@ -128,6 +128,7 @@ def rebuild_daily_summary(
         conn.execute(
             "DELETE FROM daily_cost_summary WHERE data_source = 'cur'"
         )
+        placeholders = ", ".join(["?"] * len(_EXCLUDED_LINE_ITEM_TYPES))
         conn.execute(f"""
             INSERT INTO daily_cost_summary
             SELECT
@@ -141,13 +142,18 @@ def rebuild_daily_summary(
                 COUNT(*) AS line_item_count,
                 'cur' AS data_source
             FROM cost_line_items
-            WHERE line_item_type NOT IN ({_EXCLUDED_LINE_ITEM_TYPES})
+            WHERE line_item_type NOT IN ({placeholders})
             GROUP BY
                 CAST(usage_start_date AS DATE),
                 usage_account_id,
                 product_code,
                 region
-        """)
+        """, _EXCLUDED_LINE_ITEM_TYPES)
+        result = conn.execute(
+            "SELECT COUNT(*) FROM daily_cost_summary "
+            "WHERE data_source = 'cur'"
+        ).fetchone()
+        row_count = result[0] if result else 0
         conn.execute("COMMIT")
     except Exception:
         try:
@@ -155,11 +161,7 @@ def rebuild_daily_summary(
         except Exception:
             pass
         raise
-    result = conn.execute(
-        "SELECT COUNT(*) FROM daily_cost_summary "
-        "WHERE data_source = 'cur'"
-    ).fetchone()
-    return result[0] if result else 0
+    return row_count
 
 
 def insert_cost_explorer_summary(

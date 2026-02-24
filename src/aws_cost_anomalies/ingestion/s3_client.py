@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from botocore.exceptions import ClientError, NoCredentialsError
@@ -138,7 +139,10 @@ class CURBrowser:
     ) -> Path:
         """Download a single file from S3 to local cache."""
         local_dir = Path(local_dir)
-        local_path = local_dir / s3_key.replace("/", "_")
+        # Use hash prefix to avoid collisions from path flattening
+        key_hash = hashlib.sha256(s3_key.encode()).hexdigest()[:12]
+        safe_name = s3_key.replace("/", "_")
+        local_path = local_dir / f"{key_hash}_{safe_name}"
         if local_path.exists():
             return local_path
         local_dir.mkdir(parents=True, exist_ok=True)
