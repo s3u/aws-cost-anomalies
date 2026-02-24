@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import duckdb
@@ -159,7 +159,8 @@ def build_select_clause(
             select_parts.append(f"NULL AS {target_col}")
 
     select_parts.append("current_timestamp AS _ingested_at")
-    select_parts.append(f"'{source_file}' AS _source_file")
+    escaped_source = source_file.replace("'", "''")
+    select_parts.append(f"'{escaped_source}' AS _source_file")
 
     return ", ".join(select_parts)
 
@@ -225,15 +226,15 @@ def load_parquet_file(
         parquet_columns, source_file
     )
 
-    conn.execute(f"""
-        INSERT INTO cost_line_items
-        SELECT {select_clause}
-        FROM read_parquet('{file_path}')
-    """)
+    file_str = str(file_path)
+    result = conn.execute(
+        f"INSERT INTO cost_line_items"
+        f" SELECT {select_clause}"
+        f" FROM read_parquet(?)",
+        [file_str],
+    )
 
-    row_count = conn.execute(
-        f"SELECT COUNT(*) FROM read_parquet('{file_path}')"
-    ).fetchone()
+    row_count = result.fetchone()
     return row_count[0] if row_count else 0
 
 
@@ -274,7 +275,7 @@ def record_ingestion(
             billing_period,
             s3_key,
             rows_loaded,
-            datetime.now(),
+            datetime.now(timezone.utc),
         ],
     )
 
@@ -284,7 +285,9 @@ def get_ingested_assemblies(
 ) -> dict[str, str]:
     """Return mapping of billing_period -> assembly_id."""
     rows = conn.execute(
-        "SELECT DISTINCT billing_period, assembly_id "
-        "FROM ingestion_log"
+        "SELECT billing_period, "
+        "MAX_BY(assembly_id, ingested_at) AS assembly_id "
+        "FROM ingestion_log "
+        "GROUP BY billing_period"
     ).fetchall()
     return {row[0]: row[1] for row in rows}

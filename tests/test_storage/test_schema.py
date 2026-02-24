@@ -153,7 +153,7 @@ def test_insert_cost_explorer_summary_replaces_previous(db):
 
 
 def test_insert_cost_explorer_empty_rows(db):
-    """Inserting empty list clears CE data and returns 0."""
+    """Inserting empty list is a no-op and returns 0."""
     rows = [
         (date(2025, 1, 1), "111", "AmazonEC2", "", 100.0, 95.0, 0.0, 0),
     ]
@@ -161,11 +161,43 @@ def test_insert_cost_explorer_empty_rows(db):
     count = insert_cost_explorer_summary(db, [])
     assert count == 0
 
+    # Existing CE data should be preserved (empty insert is no-op)
     total = db.execute(
         "SELECT COUNT(*) FROM daily_cost_summary "
         "WHERE data_source = 'cost_explorer'"
     ).fetchone()[0]
-    assert total == 0
+    assert total == 1
+
+
+def test_insert_cost_explorer_preserves_outside_date_range(db):
+    """Importing a narrow date range preserves CE data outside that range."""
+    # Import a wide range: Jan 1 and Jan 15
+    wide_rows = [
+        (date(2025, 1, 1), "111", "AmazonEC2", "", 100.0, 95.0, 0.0, 0),
+        (date(2025, 1, 15), "111", "AmazonS3", "", 50.0, 48.0, 0.0, 0),
+    ]
+    insert_cost_explorer_summary(db, wide_rows)
+
+    # Now import just Jan 15 with updated cost
+    narrow_rows = [
+        (date(2025, 1, 15), "111", "AmazonS3", "", 55.0, 52.0, 0.0, 0),
+    ]
+    insert_cost_explorer_summary(db, narrow_rows)
+
+    # Jan 1 data should still exist
+    jan1 = db.execute(
+        "SELECT total_unblended_cost FROM daily_cost_summary "
+        "WHERE data_source = 'cost_explorer' AND usage_date = '2025-01-01'"
+    ).fetchone()
+    assert jan1 is not None
+    assert jan1[0] == 100.0
+
+    # Jan 15 data should be the updated value
+    jan15 = db.execute(
+        "SELECT total_unblended_cost FROM daily_cost_summary "
+        "WHERE data_source = 'cost_explorer' AND usage_date = '2025-01-15'"
+    ).fetchone()
+    assert jan15[0] == 55.0
 
 
 def test_insert_cost_explorer_preserves_cur_data(db):

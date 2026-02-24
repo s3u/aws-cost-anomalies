@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import duckdb
 import numpy as np
@@ -108,7 +108,7 @@ def detect_anomalies(
             raise ValueError(f"group_by must be one of {valid_groups}")
 
     threshold = SENSITIVITY_THRESHOLDS.get(sensitivity, 2.5)
-    cutoff = date.today() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc).date() - timedelta(days=days)
 
     select_cols = ", ".join(group_cols)
     group_clause = ", ".join(group_cols)

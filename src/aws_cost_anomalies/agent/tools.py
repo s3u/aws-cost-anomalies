@@ -423,7 +423,7 @@ def _execute_cloudwatch(
                 "metric_name", "EstimatedCharges"
             )
             period_hours = tool_input.get("period_hours", 24)
-            end_time = date.today()
+            end_time = datetime.utcnow()
             start_time = end_time - timedelta(
                 hours=max(period_hours, 1)
             )

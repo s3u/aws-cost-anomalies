@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date
-from unittest.mock import patch
+from datetime import date, datetime
+from unittest.mock import MagicMock, patch
 
 from aws_cost_anomalies.analysis.trends import get_daily_trends, get_total_daily_costs
 from aws_cost_anomalies.storage.schema import rebuild_daily_summary
@@ -13,9 +13,10 @@ def test_get_daily_trends_by_service(db_with_data):
     rebuild_daily_summary(db_with_data)
 
     # Patch date.today() to be within our test data range
-    with patch("aws_cost_anomalies.analysis.trends.date") as mock_date:
-        mock_date.today.return_value = date(2025, 1, 14)
-        mock_date.side_effect = lambda *args, **kw: date(*args, **kw)
+    fake_now = MagicMock()
+    fake_now.date.return_value = date(2025, 1, 14)
+    with patch("aws_cost_anomalies.analysis.trends.datetime",
+               wraps=datetime, **{"now.return_value": fake_now}):
 
         trends = get_daily_trends(db_with_data, days=14, group_by="product_code", top_n=3)
 
@@ -29,9 +30,10 @@ def test_get_daily_trends_by_service(db_with_data):
 def test_get_daily_trends_by_account(db_with_data):
     rebuild_daily_summary(db_with_data)
 
-    with patch("aws_cost_anomalies.analysis.trends.date") as mock_date:
-        mock_date.today.return_value = date(2025, 1, 14)
-        mock_date.side_effect = lambda *args, **kw: date(*args, **kw)
+    fake_now = MagicMock()
+    fake_now.date.return_value = date(2025, 1, 14)
+    with patch("aws_cost_anomalies.analysis.trends.datetime",
+               wraps=datetime, **{"now.return_value": fake_now}):
 
         trends = get_daily_trends(db_with_data, days=14, group_by="usage_account_id", top_n=5)
 
@@ -57,9 +59,10 @@ def test_get_daily_trends_invalid_group(db):
 def test_get_total_daily_costs(db_with_data):
     rebuild_daily_summary(db_with_data)
 
-    with patch("aws_cost_anomalies.analysis.trends.date") as mock_date:
-        mock_date.today.return_value = date(2025, 1, 14)
-        mock_date.side_effect = lambda *args, **kw: date(*args, **kw)
+    fake_now = MagicMock()
+    fake_now.date.return_value = date(2025, 1, 14)
+    with patch("aws_cost_anomalies.analysis.trends.datetime",
+               wraps=datetime, **{"now.return_value": fake_now}):
 
         totals = get_total_daily_costs(db_with_data, days=14)
 
@@ -73,9 +76,10 @@ def test_get_total_daily_costs(db_with_data):
 def test_trend_rows_have_change_values(db_with_data):
     rebuild_daily_summary(db_with_data)
 
-    with patch("aws_cost_anomalies.analysis.trends.date") as mock_date:
-        mock_date.today.return_value = date(2025, 1, 14)
-        mock_date.side_effect = lambda *args, **kw: date(*args, **kw)
+    fake_now = MagicMock()
+    fake_now.date.return_value = date(2025, 1, 14)
+    with patch("aws_cost_anomalies.analysis.trends.datetime",
+               wraps=datetime, **{"now.return_value": fake_now}):
 
         trends = get_daily_trends(db_with_data, days=14, group_by="product_code", top_n=1)
 

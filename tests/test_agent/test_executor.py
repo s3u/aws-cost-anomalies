@@ -50,9 +50,13 @@ class TestValidateSQL:
         with pytest.raises(UnsafeSQLError):
             validate_sql("COPY cost_line_items TO '/tmp/data.csv'")
 
+    def test_rejects_multi_statement(self):
+        with pytest.raises(UnsafeSQLError, match="Multi-statement"):
+            validate_sql("SELECT 1; SELECT 2")
+
     # Test subquery injection: queries that start with SELECT but embed forbidden keywords
     def test_rejects_insert_in_subquery(self):
-        with pytest.raises(UnsafeSQLError, match="Forbidden SQL keyword"):
+        with pytest.raises(UnsafeSQLError, match="Multi-statement"):
             validate_sql("SELECT 1; INSERT INTO cost_line_items VALUES (1)")
 
     def test_rejects_drop_in_subquery(self):

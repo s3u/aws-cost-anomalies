@@ -101,8 +101,8 @@ def _run_question(
     history: list[dict] | None = None,
     mcp_bridge=None,
     verbose: bool = False,
-    profile: str = "",
-    aws_profile: str = "",
+    bedrock_profile: str = "",
+    cost_profile: str = "",
 ) -> list[dict] | None:
     """Send a question to the agent and display the response.
 
@@ -122,8 +122,8 @@ def _run_question(
             history=history,
             mcp_bridge=mcp_bridge,
             settings=settings,
-            profile=profile,
-            aws_profile=aws_profile,
+            bedrock_profile=bedrock_profile,
+            cost_profile=cost_profile,
         )
     except AgentError as e:
         console.print(f"[red]Error:[/red] {e}")
@@ -238,8 +238,8 @@ def query(
                     history=history,
                     mcp_bridge=bridge,
                     verbose=verbose,
-                    profile=bedrock_profile,
-                    aws_profile=cost_profile,
+                    bedrock_profile=bedrock_profile,
+                    cost_profile=cost_profile,
                 )
                 console.print()
 
@@ -250,8 +250,8 @@ def query(
                 settings=settings,
                 mcp_bridge=bridge,
                 verbose=verbose,
-                profile=bedrock_profile,
-                aws_profile=cost_profile,
+                bedrock_profile=bedrock_profile,
+                cost_profile=cost_profile,
             )
 
         else:

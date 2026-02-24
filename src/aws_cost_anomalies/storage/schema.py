@@ -150,7 +150,10 @@ def rebuild_daily_summary(
         """)
         conn.execute("COMMIT")
     except Exception:
-        conn.execute("ROLLBACK")
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
         raise
     result = conn.execute(
         "SELECT COUNT(*) FROM daily_cost_summary "
@@ -165,10 +168,9 @@ def insert_cost_explorer_summary(
 ) -> int:
     """Insert Cost Explorer data into daily_cost_summary.
 
-    Replaces ALL existing Cost Explorer rows, then inserts the new
-    rows. This means calling with a smaller date range than a
-    previous import will discard the older CE data outside the new
-    range. CUR data is always preserved.
+    Only deletes existing Cost Explorer rows whose usage_date falls
+    within the date range of the new rows, preserving CE data outside
+    that range.  CUR data is always preserved.
 
     Each tuple: (usage_date, usage_account_id, product_code, region,
                  total_unblended_cost, total_blended_cost,
@@ -176,20 +178,32 @@ def insert_cost_explorer_summary(
 
     Returns the number of rows inserted.
     """
+    if not rows:
+        return 0
+
+    # Determine the date range of incoming rows
+    dates = [r[0] for r in rows]
+    min_date = min(dates)
+    max_date = max(dates)
+
     conn.execute("BEGIN TRANSACTION")
     try:
         conn.execute(
             "DELETE FROM daily_cost_summary "
-            "WHERE data_source = 'cost_explorer'"
+            "WHERE data_source = 'cost_explorer' "
+            "AND usage_date >= ? AND usage_date <= ?",
+            [min_date, max_date],
         )
-        if rows:
-            conn.executemany(
-                "INSERT INTO daily_cost_summary "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'cost_explorer')",
-                rows,
-            )
+        conn.executemany(
+            "INSERT INTO daily_cost_summary "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'cost_explorer')",
+            rows,
+        )
         conn.execute("COMMIT")
     except Exception:
-        conn.execute("ROLLBACK")
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
         raise
     return len(rows)

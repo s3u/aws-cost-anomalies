@@ -46,8 +46,12 @@ def validate_sql(sql: str) -> str:
     """
     cleaned = sql.strip().rstrip(";")
 
+    # Block multi-statement queries (embedded semicolons)
+    if ";" in cleaned:
+        raise UnsafeSQLError("Multi-statement queries are not allowed.")
+
     # Must start with SELECT or WITH (CTEs)
-    upper = cleaned.upper().lstrip()
+    upper = cleaned.upper()
     if not (upper.startswith("SELECT") or upper.startswith("WITH")):
         raise UnsafeSQLError(
             "Only SELECT and WITH (CTE) queries are allowed. "

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import duckdb
 
@@ -39,7 +39,7 @@ def get_daily_trends(
     if group_by not in valid_groups:
         raise ValueError(f"group_by must be one of {valid_groups}")
 
-    cutoff = date.today() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc).date() - timedelta(days=days)
 
     source_filter = ""
     params: list = [cutoff]
@@ -124,7 +124,7 @@ def get_total_daily_costs(
     data_source: str | None = None,
 ) -> list[tuple[date, float]]:
     """Get total daily cost across all dimensions."""
-    cutoff = date.today() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc).date() - timedelta(days=days)
 
     source_filter = ""
     params: list = [cutoff]

@@ -97,7 +97,7 @@ class TestProfileForwarding:
         mock_client.converse.return_value = _bedrock_text_response("ok")
         MockClient.return_value = mock_client
 
-        run_agent("q", db_conn, profile="cross-account-bedrock")
+        run_agent("q", db_conn, bedrock_profile="cross-account-bedrock")
 
         MockClient.assert_called_once_with(
             region="us-east-1", profile="cross-account-bedrock"

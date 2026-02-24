@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -62,9 +62,11 @@ def _insert_and_rebuild(db, rows):
 
 
 def _patch_today(target_date):
-    """Context manager to mock date.today() in anomalies module."""
-    return patch("aws_cost_anomalies.analysis.anomalies.date",
-                 wraps=date, **{"today.return_value": target_date})
+    """Context manager to mock datetime.now(tz).date() in anomalies module."""
+    fake_now = MagicMock()
+    fake_now.date.return_value = target_date
+    return patch("aws_cost_anomalies.analysis.anomalies.datetime",
+                 wraps=datetime, **{"now.return_value": fake_now})
 
 
 # ── Severity classification ──────────────────────────────────────────

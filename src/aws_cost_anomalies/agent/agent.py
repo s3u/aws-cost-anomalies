@@ -60,8 +60,8 @@ def run_agent(
     history: list[dict] | None = None,
     mcp_bridge: MCPBridge | None = None,
     settings: Settings | None = None,
-    profile: str = "",
-    aws_profile: str = "",
+    bedrock_profile: str = "",
+    cost_profile: str = "",
 ) -> AgentResponse:
     """Run the agentic loop.
 
@@ -79,8 +79,8 @@ def run_agent(
             and after (tool_result set) each tool execution.
         history: Prior conversation messages for multi-turn context.
         settings: Application settings (for ingestion tools).
-        profile: Named AWS profile for Bedrock API calls.
-        aws_profile: Named AWS profile for cost-data API calls
+        bedrock_profile: Named AWS profile for Bedrock API calls.
+        cost_profile: Named AWS profile for cost-data API calls
             (CE, S3, CloudWatch, Budgets, Orgs).
 
     Returns:
@@ -91,14 +91,14 @@ def run_agent(
         AgentError: On Bedrock failures or if the loop is exhausted.
     """
     try:
-        client = BedrockClient(region=region, profile=profile)
+        client = BedrockClient(region=region, profile=bedrock_profile)
     except BedrockError as e:
         raise AgentError(str(e))
 
     context = ToolContext(
         db_conn=db_conn,
         aws_region=region,
-        aws_profile=aws_profile,
+        aws_profile=cost_profile,
         settings=settings,
     )
 
@@ -223,7 +223,8 @@ def run_agent(
             )
             continue
 
-        # Unexpected stop reason — treat as final answer
+        # Unexpected stop reason (max_tokens, content_filtered, etc.)
+        # Return any partial text if present; otherwise raise.
         answer_parts = []
         for block in assistant_message.get("content", []):
             if "text" in block:
@@ -236,7 +237,12 @@ def run_agent(
                 output_tokens=total_output_tokens,
                 messages=messages,
             )
-        break
+        raise AgentError(
+            f"Agent stopped unexpectedly "
+            f"(stopReason='{stop_reason}'). "
+            f"The response may have been content-filtered "
+            f"or hit a token limit."
+        )
 
     raise AgentError(
         f"Agent did not produce a final answer after "
