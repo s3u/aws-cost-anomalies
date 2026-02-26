@@ -121,6 +121,7 @@ def db_with_data(db: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
                             cost * 10,
                             "USD",
                             f"{svc_name} usage",
+                            "AWS",
                             datetime.now(),
                             "test-file.parquet",
                         )
@@ -128,7 +129,7 @@ def db_with_data(db: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
 
     db.executemany(
         """INSERT INTO cost_line_items VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )""",
         rows,
     )

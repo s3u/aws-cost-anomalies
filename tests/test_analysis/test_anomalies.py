@@ -18,7 +18,7 @@ from aws_cost_anomalies.storage.schema import rebuild_daily_summary
 
 _INSERT_SQL = (
     "INSERT INTO cost_line_items VALUES ("
-    + ", ".join(["?"] * 23)
+    + ", ".join(["?"] * 24)
     + ")"
 )
 
@@ -50,6 +50,7 @@ def _make_row(day_offset, cost, base_date=date(2025, 1, 1),
         cost * 10,
         "USD",
         "test",
+        "AWS",
         datetime.now(),
         "test.parquet",
     )

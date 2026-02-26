@@ -34,6 +34,7 @@ CUR_V1_COLUMN_MAP = {
     "lineItem/UsageAmount": "usage_amount",
     "lineItem/CurrencyCode": "currency_code",
     "lineItem/LineItemDescription": "line_item_description",
+    "bill/BillingEntity": "billing_entity",
 }
 
 # CUR v2 uses underscore-separated names
@@ -59,6 +60,7 @@ CUR_V2_COLUMN_MAP = {
     "line_item_usage_amount": "usage_amount",
     "line_item_currency_code": "currency_code",
     "line_item_line_item_description": "line_item_description",
+    "bill_billing_entity": "billing_entity",
 }
 
 # Columns that must be present for meaningful data
@@ -144,6 +146,7 @@ def build_select_clause(parquet_columns: list[str]) -> str:
         "usage_amount",
         "currency_code",
         "line_item_description",
+        "billing_entity",
     ]
 
     reverse_map = {v: k for k, v in col_map.items()}

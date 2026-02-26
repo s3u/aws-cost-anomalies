@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS cost_line_items (
     usage_amount DOUBLE,
     currency_code VARCHAR,
     line_item_description VARCHAR,
+    billing_entity VARCHAR,
     _ingested_at TIMESTAMP DEFAULT current_timestamp,
     _source_file VARCHAR
 )
@@ -106,6 +107,12 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(
         "ALTER TABLE daily_cost_summary "
         "ADD COLUMN IF NOT EXISTS data_source VARCHAR DEFAULT 'cur'"
+    )
+
+    # Migration: add billing_entity column to existing databases
+    conn.execute(
+        "ALTER TABLE cost_line_items "
+        "ADD COLUMN IF NOT EXISTS billing_entity VARCHAR"
     )
 
     # Migration: add net amortized cost column to existing databases

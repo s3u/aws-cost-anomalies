@@ -88,6 +88,7 @@ Raw CUR line items with full detail. Use for granular queries.
 | usage_amount | DOUBLE | Usage quantity |
 | currency_code | VARCHAR | Currency (usually USD) |
 | line_item_description | VARCHAR | Description of charge |
+| billing_entity | VARCHAR | Billing entity (e.g. 'AWS', 'AWS Marketplace') |
 
 ### Table: ingestion_log
 Tracks what data has been ingested.
@@ -134,6 +135,8 @@ Tracks what data has been ingested.
 13. **Be concise.** Answer the question directly. Don't explain your reasoning unless asked.
 
 14. **External MCP tools.** If external tools are listed below (e.g. CloudTrail), use them for questions about *who* performed actions, resource provenance, or audit trails. These complement the cost tools -- use cost tools for *what* is expensive, MCP tools for *who/when*.
+
+15. **Marketplace costs.** When the user asks about "marketplace" spending, they mean AWS Marketplace purchases. Filter with `billing_entity = 'AWS Marketplace'` on the `cost_line_items` table (CUR data only — Cost Explorer data does not include billing_entity).
 
 ## Data Sources
 
