@@ -75,7 +75,7 @@ def explain_anomaly(
     # Get baseline costs
     baseline_rows = conn.execute(
         f"""
-        SELECT usage_date, SUM(total_unblended_cost) AS cost
+        SELECT usage_date, SUM(total_net_amortized_cost) AS cost
         FROM daily_cost_summary
         WHERE product_code = ?
           {acct_filter}
@@ -89,7 +89,7 @@ def explain_anomaly(
     # Get anomaly day cost
     anomaly_row = conn.execute(
         f"""
-        SELECT SUM(total_unblended_cost) AS cost
+        SELECT SUM(total_net_amortized_cost) AS cost
         FROM daily_cost_summary
         WHERE product_code = ?
           {acct_filter}
@@ -132,7 +132,7 @@ def explain_anomaly(
 
     after_rows = conn.execute(
         f"""
-        SELECT usage_date, SUM(total_unblended_cost) AS cost
+        SELECT usage_date, SUM(total_net_amortized_cost) AS cost
         FROM daily_cost_summary
         WHERE product_code = ?
           {acct_filter}
@@ -170,7 +170,7 @@ def explain_anomaly(
             f"""
             WITH baseline AS (
                 SELECT usage_type,
-                       SUM(unblended_cost) / ? AS avg_cost
+                       SUM(net_unblended_cost) / ? AS avg_cost
                 FROM cost_line_items
                 WHERE product_code = ?
                   {acct_filter}
@@ -180,7 +180,7 @@ def explain_anomaly(
             ),
             anomaly AS (
                 SELECT usage_type,
-                       SUM(unblended_cost) AS cost
+                       SUM(net_unblended_cost) AS cost
                 FROM cost_line_items
                 WHERE product_code = ?
                   {acct_filter}

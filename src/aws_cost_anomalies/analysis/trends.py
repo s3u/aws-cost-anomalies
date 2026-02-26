@@ -50,7 +50,7 @@ def get_daily_trends(
     # First get top N groups by total cost in the window
     top_groups = conn.execute(
         f"""
-        SELECT {group_by}, SUM(total_unblended_cost) as total
+        SELECT {group_by}, SUM(total_net_amortized_cost) as total
         FROM daily_cost_summary
         WHERE usage_date >= ?{source_filter}
         GROUP BY {group_by}
@@ -78,7 +78,7 @@ def get_daily_trends(
             SELECT
                 usage_date,
                 {group_by} AS group_value,
-                SUM(total_unblended_cost) AS total_cost
+                SUM(total_net_amortized_cost) AS total_cost
             FROM daily_cost_summary
             WHERE usage_date >= ?{detail_source_filter}
               AND {group_by} IN ({placeholders})
@@ -208,7 +208,7 @@ def get_cost_trend(
         sql = f"""
         SELECT DATE_TRUNC('{trunc_unit}', usage_date) AS period_date,
                {column} AS group_value,
-               SUM(total_unblended_cost) AS cost
+               SUM(total_net_amortized_cost) AS cost
         FROM daily_cost_summary
         WHERE usage_date >= ? AND usage_date <= ?
           {filter_clause}
@@ -218,7 +218,7 @@ def get_cost_trend(
     else:
         sql = f"""
         SELECT DATE_TRUNC('{trunc_unit}', usage_date) AS period_date,
-               SUM(total_unblended_cost) AS cost
+               SUM(total_net_amortized_cost) AS cost
         FROM daily_cost_summary
         WHERE usage_date >= ? AND usage_date <= ?
           {filter_clause}
@@ -284,7 +284,7 @@ def get_total_daily_costs(
 
     rows = conn.execute(
         f"""
-        SELECT usage_date, SUM(total_unblended_cost) AS total_cost
+        SELECT usage_date, SUM(total_net_amortized_cost) AS total_cost
         FROM daily_cost_summary
         WHERE usage_date >= ?{source_filter}
         GROUP BY usage_date

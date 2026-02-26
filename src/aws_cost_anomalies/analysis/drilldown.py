@@ -82,7 +82,7 @@ def drill_down_cost_spike(
     # Total cost
     total_row = conn.execute(
         f"""
-        SELECT SUM(unblended_cost) AS total
+        SELECT SUM(net_unblended_cost) AS total
         FROM cost_line_items
         WHERE CAST(usage_start_date AS DATE) >= ?
           AND CAST(usage_start_date AS DATE) <= ?
@@ -97,7 +97,7 @@ def drill_down_cost_spike(
     usage_type_rows = conn.execute(
         f"""
         SELECT usage_type,
-               SUM(unblended_cost) AS cost,
+               SUM(net_unblended_cost) AS cost,
                SUM(usage_amount) AS usage_amount
         FROM cost_line_items
         WHERE CAST(usage_start_date AS DATE) >= ?
@@ -125,7 +125,7 @@ def drill_down_cost_spike(
     operation_rows = conn.execute(
         f"""
         SELECT operation,
-               SUM(unblended_cost) AS cost
+               SUM(net_unblended_cost) AS cost
         FROM cost_line_items
         WHERE CAST(usage_start_date AS DATE) >= ?
           AND CAST(usage_start_date AS DATE) <= ?
@@ -151,7 +151,7 @@ def drill_down_cost_spike(
     resource_rows = conn.execute(
         f"""
         SELECT resource_id,
-               SUM(unblended_cost) AS cost
+               SUM(net_unblended_cost) AS cost
         FROM cost_line_items
         WHERE CAST(usage_start_date AS DATE) >= ?
           AND CAST(usage_start_date AS DATE) <= ?

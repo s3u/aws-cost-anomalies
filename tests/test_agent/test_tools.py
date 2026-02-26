@@ -467,7 +467,7 @@ class TestDetectCostAnomalies:
         ]
         assert len(ec2_anomalies) == 1
         assert ec2_anomalies[0]["direction"] == "spike"
-        assert ec2_anomalies[0]["current_cost"] == 500.0
+        assert ec2_anomalies[0]["current_cost"] == 440.0
 
     def test_returns_summary(self, anomaly_context):
         result = execute_tool(
@@ -745,13 +745,13 @@ class TestComparePeriods:
         )
         assert "error" not in result
 
-        # Period A: EC2 700 + S3 140 + RDS 350 = 1190
-        assert result["period_a"]["total_cost"] == 1190.0
-        # Period B: EC2 1400 + S3 140 + Lambda 210 = 1750
-        assert result["period_b"]["total_cost"] == 1750.0
+        # Period A: EC2 616 + S3 123.2 + RDS 308 = 1047.2 (net amortized)
+        assert result["period_a"]["total_cost"] == 1047.2
+        # Period B: EC2 1232 + S3 123.2 + Lambda 184.8 = 1540.0 (net amortized)
+        assert result["period_b"]["total_cost"] == 1540.0
 
         # Total change
-        assert result["total_change"]["absolute"] == 560.0
+        assert result["total_change"]["absolute"] == 492.8
         assert result["total_change"]["percentage"] is not None
 
         # Movers should include EC2 (present in both, changed)
@@ -843,9 +843,9 @@ class TestDrillDownCostSpike:
                 "INSERT INTO cost_line_items "
                 "(usage_start_date, usage_account_id, product_code, "
                 "usage_type, operation, resource_id, unblended_cost, "
-                "usage_amount, line_item_type) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Usage')",
-                list(item),
+                "net_unblended_cost, usage_amount, line_item_type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Usage')",
+                [*item[:-1], item[-2], item[-1]],
             )
         return conn
 
@@ -968,12 +968,14 @@ class TestScanAnomaliesOverRange:
         for day_offset in range(30):
             usage_date = base_date + timedelta(days=day_offset)
             # Stable EC2 at $100/day, spike to $500 on Jan 15
-            ec2_cost = 500.0 if usage_date == d(2025, 1, 15) else 100.0
+            is_spike = usage_date == d(2025, 1, 15)
+            ec2_cost = 500.0 if is_spike else 100.0
+            ec2_amortized = 440.0 if is_spike else 88.0
             conn.execute(
                 "INSERT INTO daily_cost_summary VALUES "
                 "(?, '111111111111', 'AmazonEC2', 'us-east-1', "
-                "?, 95.0, 88.0, 50, 10, 'cur')",
-                [usage_date, ec2_cost],
+                "?, 95.0, ?, 50, 10, 'cur')",
+                [usage_date, ec2_cost, ec2_amortized],
             )
             # Stable S3 at $20/day
             conn.execute(
@@ -1092,20 +1094,20 @@ class TestAttributeCostChange:
                 "INSERT INTO cost_line_items "
                 "(usage_start_date, usage_account_id, product_code, "
                 "usage_type, operation, resource_id, unblended_cost, "
-                "usage_amount, line_item_type) "
+                "net_unblended_cost, usage_amount, line_item_type) "
                 "VALUES (?, '111111111111', 'AmazonEC2', "
                 "'BoxUsage:m5.xlarge', 'RunInstances', 'i-abc123', "
-                "80.0, 24.0, 'Usage')",
+                "80.0, 80.0, 24.0, 'Usage')",
                 [dt],
             )
             conn.execute(
                 "INSERT INTO cost_line_items "
                 "(usage_start_date, usage_account_id, product_code, "
                 "usage_type, operation, resource_id, unblended_cost, "
-                "usage_amount, line_item_type) "
+                "net_unblended_cost, usage_amount, line_item_type) "
                 "VALUES (?, '111111111111', 'AmazonEC2', "
                 "'EBS:VolumeUsage.gp3', 'CreateVolume', 'vol-001', "
-                "15.0, 500.0, 'Usage')",
+                "15.0, 15.0, 500.0, 'Usage')",
                 [dt],
             )
 
@@ -1117,10 +1119,10 @@ class TestAttributeCostChange:
                 "INSERT INTO cost_line_items "
                 "(usage_start_date, usage_account_id, product_code, "
                 "usage_type, operation, resource_id, unblended_cost, "
-                "usage_amount, line_item_type) "
+                "net_unblended_cost, usage_amount, line_item_type) "
                 "VALUES (?, '111111111111', 'AmazonEC2', "
                 "'BoxUsage:m5.xlarge', 'RunInstances', 'i-abc123', "
-                "160.0, 48.0, 'Usage')",
+                "160.0, 160.0, 48.0, 'Usage')",
                 [dt],
             )
             # New SpotUsage
@@ -1128,10 +1130,10 @@ class TestAttributeCostChange:
                 "INSERT INTO cost_line_items "
                 "(usage_start_date, usage_account_id, product_code, "
                 "usage_type, operation, resource_id, unblended_cost, "
-                "usage_amount, line_item_type) "
+                "net_unblended_cost, usage_amount, line_item_type) "
                 "VALUES (?, '111111111111', 'AmazonEC2', "
                 "'SpotUsage:c5.xlarge', 'RunInstances', 'i-spot001', "
-                "40.0, 24.0, 'Usage')",
+                "40.0, 40.0, 24.0, 'Usage')",
                 [dt],
             )
             # EBS gone — no rows in period B
@@ -1141,10 +1143,10 @@ class TestAttributeCostChange:
             "INSERT INTO cost_line_items "
             "(usage_start_date, usage_account_id, product_code, "
             "usage_type, operation, resource_id, unblended_cost, "
-            "usage_amount, line_item_type) "
+            "net_unblended_cost, usage_amount, line_item_type) "
             "VALUES ('2025-01-01', '222222222222', 'AmazonEC2', "
             "'BoxUsage:t3.micro', 'RunInstances', 'i-dev001', "
-            "5.0, 24.0, 'Usage')"
+            "5.0, 5.0, 24.0, 'Usage')"
         )
 
         return conn
@@ -1440,30 +1442,30 @@ class TestExplainAnomaly:
                 "INSERT INTO cost_line_items "
                 "(usage_start_date, usage_account_id, product_code, "
                 "usage_type, operation, resource_id, unblended_cost, "
-                "usage_amount, line_item_type) "
+                "net_unblended_cost, usage_amount, line_item_type) "
                 "VALUES (?, '111111111111', 'AmazonEC2', "
                 "'BoxUsage:m5.xlarge', 'RunInstances', 'i-abc123', "
-                "70.0, 24.0, 'Usage')",
+                "70.0, 70.0, 24.0, 'Usage')",
                 [dt],
             )
             conn.execute(
                 "INSERT INTO cost_line_items "
                 "(usage_start_date, usage_account_id, product_code, "
                 "usage_type, operation, resource_id, unblended_cost, "
-                "usage_amount, line_item_type) "
+                "net_unblended_cost, usage_amount, line_item_type) "
                 "VALUES (?, '111111111111', 'AmazonEC2', "
                 "'EBS:VolumeUsage.gp3', 'CreateVolume', 'vol-001', "
-                "20.0, 500.0, 'Usage')",
+                "20.0, 20.0, 500.0, 'Usage')",
                 [dt],
             )
             conn.execute(
                 "INSERT INTO cost_line_items "
                 "(usage_start_date, usage_account_id, product_code, "
                 "usage_type, operation, resource_id, unblended_cost, "
-                "usage_amount, line_item_type) "
+                "net_unblended_cost, usage_amount, line_item_type) "
                 "VALUES (?, '111111111111', 'AmazonEC2', "
                 "'DataTransfer-Out-Bytes', 'InterZone-Out', '', "
-                "10.0, 100.0, 'Usage')",
+                "10.0, 10.0, 100.0, 'Usage')",
                 [dt],
             )
 
@@ -1478,28 +1480,28 @@ class TestExplainAnomaly:
             "INSERT INTO cost_line_items "
             "(usage_start_date, usage_account_id, product_code, "
             "usage_type, operation, resource_id, unblended_cost, "
-            "usage_amount, line_item_type) "
+            "net_unblended_cost, usage_amount, line_item_type) "
             "VALUES ('2025-01-15', '111111111111', 'AmazonEC2', "
             "'BoxUsage:m5.xlarge', 'RunInstances', 'i-abc123', "
-            "350.0, 120.0, 'Usage')"
+            "350.0, 350.0, 120.0, 'Usage')"
         )
         conn.execute(
             "INSERT INTO cost_line_items "
             "(usage_start_date, usage_account_id, product_code, "
             "usage_type, operation, resource_id, unblended_cost, "
-            "usage_amount, line_item_type) "
+            "net_unblended_cost, usage_amount, line_item_type) "
             "VALUES ('2025-01-15', '111111111111', 'AmazonEC2', "
             "'EBS:VolumeUsage.gp3', 'CreateVolume', 'vol-001', "
-            "100.0, 2500.0, 'Usage')"
+            "100.0, 100.0, 2500.0, 'Usage')"
         )
         conn.execute(
             "INSERT INTO cost_line_items "
             "(usage_start_date, usage_account_id, product_code, "
             "usage_type, operation, resource_id, unblended_cost, "
-            "usage_amount, line_item_type) "
+            "net_unblended_cost, usage_amount, line_item_type) "
             "VALUES ('2025-01-15', '111111111111', 'AmazonEC2', "
             "'DataTransfer-Out-Bytes', 'InterZone-Out', '', "
-            "50.0, 500.0, 'Usage')"
+            "50.0, 50.0, 500.0, 'Usage')"
         )
 
         # After spike: Jan 16-18 back to normal $100
@@ -1526,10 +1528,10 @@ class TestExplainAnomaly:
         )
         assert "error" not in result
         assert result["service"] == "AmazonEC2"
-        assert result["anomaly_cost"] == 500.0
-        assert result["baseline"]["median_cost"] == 100.0
+        assert result["anomaly_cost"] == 440.0
+        assert result["baseline"]["median_cost"] == 88.0
         assert result["cost_multiple"] == 5.0
-        assert result["cost_vs_median"] == 400.0
+        assert result["cost_vs_median"] == 352.0
         assert result["has_baseline"] is True
         assert "summary" in result
 
@@ -1587,7 +1589,7 @@ class TestExplainAnomaly:
         assert "error" not in result
         assert result["has_cur_data"] is False
         assert result["top_usage_type_changes"] == []
-        assert result["anomaly_cost"] == 200.0
+        assert result["anomaly_cost"] == 176.0
 
     def test_no_data_error(self, explainer_context):
         result = execute_tool(

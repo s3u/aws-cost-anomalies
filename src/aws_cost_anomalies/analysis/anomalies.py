@@ -125,7 +125,7 @@ def detect_anomalies(
 
     rows = conn.execute(
         f"""
-        SELECT {select_cols}, usage_date, SUM(total_unblended_cost) AS daily_cost
+        SELECT {select_cols}, usage_date, SUM(total_net_amortized_cost) AS daily_cost
         FROM daily_cost_summary
         WHERE usage_date >= ? AND usage_date <= ?{source_filter}
         GROUP BY {group_clause}, usage_date

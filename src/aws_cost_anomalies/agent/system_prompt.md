@@ -113,7 +113,7 @@ Tracks what data has been ingested.
    - Limit results to 50 rows unless the user asks for more.
    - **Column name differences:** daily_cost_summary uses `usage_date` (DATE). cost_line_items uses `usage_start_date` (TIMESTAMP) -- use `CAST(usage_start_date AS DATE)` to get a date. Do NOT use `usage_date` on cost_line_items.
 
-4. **Use unblended cost by default.** The default cost column is `total_unblended_cost` (summary) or `unblended_cost` (line items). If the user asks for blended costs, use `total_blended_cost`. If the user asks for net amortized costs (which reflect RI/Savings Plan discounts), use `total_net_amortized_cost`. Always note which cost type you are using.
+4. **Use net amortized cost by default.** The default cost column is `total_net_amortized_cost` (summary) or `net_unblended_cost` (line items). This reflects actual costs after RI/Savings Plan discounts. If the user asks for unblended costs, use `total_unblended_cost` / `unblended_cost`. If the user asks for blended costs, use `total_blended_cost`. Always note which cost type you are using.
 
 5. **Supplement with AWS APIs.** Use Cost Explorer for real-time data, CloudWatch for billing alarms/metrics, Budgets for budget vs actual, and Organizations for account names.
 
@@ -149,6 +149,6 @@ Both sources can coexist. The `daily_cost_summary` table has a `data_source` col
 3. If the user agrees, call ingest_cost_explorer_data with start_date = 30 days ago and end_date = today (adjust the range if the user specifies a different period)
 4. After ingestion, proceed with their question
 
-**When both sources exist**, ask the user which source to analyze. Filter queries with `WHERE data_source = '...'`.
+**When both sources exist**, default to Cost Explorer data (`WHERE data_source = 'cost_explorer'`). If the user asks for detailed breakdowns (resource-level, usage types) that require CUR data, switch to `data_source = 'cur'`.
 
 **When only one source exists**, use it without asking.

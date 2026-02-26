@@ -69,13 +69,13 @@ def compare_periods(
 
     sql = f"""
     WITH period_a AS (
-        SELECT {column} AS group_value, SUM(total_unblended_cost) AS cost
+        SELECT {column} AS group_value, SUM(total_net_amortized_cost) AS cost
         FROM daily_cost_summary
         WHERE usage_date >= ? AND usage_date <= ?
         GROUP BY {column}
     ),
     period_b AS (
-        SELECT {column} AS group_value, SUM(total_unblended_cost) AS cost
+        SELECT {column} AS group_value, SUM(total_net_amortized_cost) AS cost
         FROM daily_cost_summary
         WHERE usage_date >= ? AND usage_date <= ?
         GROUP BY {column}

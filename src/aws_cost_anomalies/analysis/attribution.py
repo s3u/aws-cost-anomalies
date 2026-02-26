@@ -115,7 +115,7 @@ def attribute_cost_change(
             )
         sql = f"""
         WITH period_a AS (
-            SELECT {dimension} AS key, SUM(unblended_cost) AS cost
+            SELECT {dimension} AS key, SUM(net_unblended_cost) AS cost
             FROM cost_line_items
             WHERE product_code = ?
               {acct_filter}
@@ -124,7 +124,7 @@ def attribute_cost_change(
             GROUP BY {dimension}
         ),
         period_b AS (
-            SELECT {dimension} AS key, SUM(unblended_cost) AS cost
+            SELECT {dimension} AS key, SUM(net_unblended_cost) AS cost
             FROM cost_line_items
             WHERE product_code = ?
               {acct_filter}
