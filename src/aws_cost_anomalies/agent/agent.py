@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
 import duckdb
@@ -105,7 +106,8 @@ def run_agent(
         settings=settings,
     )
 
-    system_text = AGENT_SYSTEM_PROMPT
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    system_text = f"**Today's date is {today}.**\n\n" + AGENT_SYSTEM_PROMPT
     all_tools = list(TOOL_DEFINITIONS)
 
     if mcp_bridge is not None:
