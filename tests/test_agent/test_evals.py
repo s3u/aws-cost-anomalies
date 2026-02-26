@@ -657,3 +657,129 @@ class TestScanAnomaliesOverRange:
             f"Expected reference to the spike around Jan 15.\n"
             f"Answer: {response.answer[:500]}"
         )
+
+
+# ============================================================================
+# Eval 16: Attribute Cost Change
+# ============================================================================
+
+
+@pytest.mark.evals
+class TestAttributeCostChange:
+    """Verify the agent uses attribute_cost_change to explain what changed."""
+
+    def test_attribute_ec2_spike(self, eval_db_with_cur_data):  # noqa: F811
+        """Agent should attribute EC2 cost changes between periods."""
+        response = _run(
+            "EC2 costs spiked today compared to the previous week. "
+            "What specific usage types or resources changed?",
+            eval_db_with_cur_data,
+        )
+
+        assert_valid_response(response)
+
+        # Should use attribution or drill-down tool
+        tool_names = [s.tool_name for s in response.steps]
+        used_attribution = "attribute_cost_change" in tool_names
+        used_drilldown = "drill_down_cost_spike" in tool_names
+        assert used_attribution or used_drilldown, (
+            f"Expected attribute_cost_change or drill_down_cost_spike, "
+            f"but agent used: {tool_names}"
+        )
+
+        # Must mention EC2
+        assert_answer_contains(response, "EC2")
+
+        # Should mention usage type details
+        answer_lower = response.answer.lower()
+        detail_indicators = [
+            "boxusage", "usage type", "usage_type",
+            "ebs", "datatransfer", "spot",
+            "new", "changed", "increased", "doubled",
+        ]
+        has_detail = any(ind in answer_lower for ind in detail_indicators)
+        assert has_detail, (
+            f"Expected usage type change details in attribution answer.\n"
+            f"Answer: {response.answer[:500]}"
+        )
+
+
+# ============================================================================
+# Eval 17: Get Cost Trend
+# ============================================================================
+
+
+@pytest.mark.evals
+class TestGetCostTrend:
+    """Verify the agent uses get_cost_trend for time-series questions."""
+
+    def test_ec2_daily_trend(self, eval_db):  # noqa: F811
+        """Agent should show the daily cost trend for EC2 in January."""
+        response = _run(
+            "Show me the daily cost trend for EC2 in January 2025.",
+            eval_db,
+        )
+
+        assert_valid_response(response)
+
+        # Should use trend tool or query_cost_database
+        tool_names = [s.tool_name for s in response.steps]
+        used_trend = "get_cost_trend" in tool_names
+        used_query = "query_cost_database" in tool_names
+        assert used_trend or used_query, (
+            f"Expected get_cost_trend or query_cost_database, "
+            f"but agent used: {tool_names}"
+        )
+
+        # Must mention EC2
+        assert_answer_contains(response, "EC2")
+
+        # Should have dollar amounts
+        assert_cost_in_answer(
+            response, SERVICE_TOTALS["AmazonEC2"] / 30, tolerance=0.15
+        )
+
+
+# ============================================================================
+# Eval 18: Explain Anomaly
+# ============================================================================
+
+
+@pytest.mark.evals
+class TestExplainAnomaly:
+    """Verify the agent uses explain_anomaly to build a narrative."""
+
+    def test_explain_ec2_anomaly(self, eval_db_with_spike):  # noqa: F811
+        """Agent should explain the EC2 anomaly with baseline comparison."""
+        response = _run(
+            "There's an EC2 cost anomaly today. Explain what happened — "
+            "how does today compare to normal, and is it ongoing?",
+            eval_db_with_spike,
+        )
+
+        assert_valid_response(response)
+
+        # Should use explain_anomaly or detect_cost_anomalies
+        tool_names = [s.tool_name for s in response.steps]
+        used_explain = "explain_anomaly" in tool_names
+        used_detect = "detect_cost_anomalies" in tool_names
+        assert used_explain or used_detect, (
+            f"Expected explain_anomaly or detect_cost_anomalies, "
+            f"but agent used: {tool_names}"
+        )
+
+        # Must mention EC2
+        assert_answer_contains(response, "EC2")
+
+        # Should describe the magnitude (spike, multiple, higher, etc.)
+        answer_lower = response.answer.lower()
+        magnitude_indicators = [
+            "spike", "increase", "higher", "above", "elevated",
+            "times", "multiple", "5x", "5×", "500%",
+            "compared to", "baseline", "normal", "median",
+        ]
+        has_magnitude = any(ind in answer_lower for ind in magnitude_indicators)
+        assert has_magnitude, (
+            f"Expected magnitude/comparison language in anomaly explanation.\n"
+            f"Answer: {response.answer[:500]}"
+        )

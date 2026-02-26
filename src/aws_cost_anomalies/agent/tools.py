@@ -636,6 +636,52 @@ GET_COST_TREND_SPEC: dict = {
     }
 }
 
+EXPLAIN_ANOMALY_SPEC: dict = {
+    "toolSpec": {
+        "name": "explain_anomaly",
+        "description": (
+            "Comprehensive anomaly explanation: baseline statistics, "
+            "magnitude vs normal, whether the anomaly is ongoing, and "
+            "usage-type attribution (if CUR data is available). Use "
+            "after detecting an anomaly to build a full narrative."
+        ),
+        "inputSchema": {
+            "json": {
+                "type": "object",
+                "properties": {
+                    "service": {
+                        "type": "string",
+                        "description": (
+                            "AWS product_code with the anomaly "
+                            "(e.g. 'AmazonEC2')."
+                        ),
+                    },
+                    "anomaly_date": {
+                        "type": "string",
+                        "description": (
+                            "Date of the anomaly (YYYY-MM-DD)."
+                        ),
+                    },
+                    "account_id": {
+                        "type": "string",
+                        "description": (
+                            "Optional AWS account ID to filter by."
+                        ),
+                    },
+                    "baseline_days": {
+                        "type": "integer",
+                        "description": (
+                            "Number of days before anomaly_date to "
+                            "use as baseline. Default 14."
+                        ),
+                    },
+                },
+                "required": ["service", "anomaly_date"],
+            }
+        },
+    }
+}
+
 
 # ---------------------------------------------------------------------------
 # Tool registry
@@ -655,6 +701,7 @@ TOOL_DEFINITIONS: list[dict] = [
     SCAN_ANOMALIES_OVER_RANGE_SPEC,
     ATTRIBUTE_COST_CHANGE_SPEC,
     GET_COST_TREND_SPEC,
+    EXPLAIN_ANOMALY_SPEC,
 ]
 
 
@@ -1571,6 +1618,87 @@ def _execute_get_cost_trend(
     }
 
 
+def _execute_explain_anomaly(
+    tool_input: dict, context: ToolContext
+) -> dict:
+    """Explain an anomaly with baseline stats and attribution."""
+    from aws_cost_anomalies.analysis.explainer import explain_anomaly
+
+    service = tool_input.get("service", "")
+    if not service:
+        return {"error": "service is required."}
+
+    try:
+        anomaly_dt = date.fromisoformat(tool_input["anomaly_date"])
+    except (KeyError, ValueError) as e:
+        return {"error": f"Invalid or missing anomaly_date: {e}"}
+
+    account_id = tool_input.get("account_id")
+    baseline_days = tool_input.get("baseline_days", 14)
+
+    try:
+        result = explain_anomaly(
+            context.db_conn,
+            service=service,
+            anomaly_date=anomaly_dt,
+            account_id=account_id,
+            baseline_days=baseline_days,
+        )
+    except ValueError as e:
+        return {"error": str(e)}
+
+    usage_changes = [
+        {
+            "usage_type": c.usage_type,
+            "baseline_cost": c.baseline_cost,
+            "anomaly_cost": c.anomaly_cost,
+            "absolute_change": c.absolute_change,
+            "pct_change": c.pct_change,
+        }
+        for c in result.top_usage_type_changes
+    ]
+
+    ongoing_desc = ""
+    if result.is_ongoing:
+        ongoing_desc = (
+            f" Costs remained elevated for {result.elevated_days_after} "
+            f"of {result.days_after_checked} days after."
+        )
+    elif result.days_after_checked > 0:
+        ongoing_desc = (
+            f" Costs returned to normal within "
+            f"{result.days_after_checked} days."
+        )
+
+    return {
+        "service": result.service,
+        "anomaly_date": result.anomaly_date.isoformat(),
+        "account_id": result.account_id,
+        "baseline": {
+            "days": baseline_days,
+            "median_cost": result.baseline_median,
+            "min_cost": result.baseline_min,
+            "max_cost": result.baseline_max,
+        },
+        "anomaly_cost": result.anomaly_cost,
+        "cost_vs_median": result.cost_vs_median,
+        "cost_multiple": result.cost_multiple,
+        "is_ongoing": result.is_ongoing,
+        "days_after_checked": result.days_after_checked,
+        "elevated_days_after": result.elevated_days_after,
+        "has_cur_data": result.has_cur_data,
+        "has_baseline": result.has_baseline,
+        "top_usage_type_changes": usage_changes,
+        "summary": (
+            f"{result.service} cost on {result.anomaly_date} was "
+            f"${result.anomaly_cost:,.2f}, which is "
+            f"{result.cost_multiple:.1f}x the baseline median "
+            f"of ${result.baseline_median:,.2f} "
+            f"(+${result.cost_vs_median:,.2f}).{ongoing_desc}"
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Executor registry and dispatch
 # ---------------------------------------------------------------------------
@@ -1589,6 +1717,7 @@ _EXECUTORS: dict[str, Callable[[dict, ToolContext], dict]] = {
     "scan_anomalies_over_range": _execute_scan_anomalies_over_range,
     "attribute_cost_change": _execute_attribute_cost_change,
     "get_cost_trend": _execute_get_cost_trend,
+    "explain_anomaly": _execute_explain_anomaly,
 }
 
 

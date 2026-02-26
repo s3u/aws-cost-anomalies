@@ -45,7 +45,7 @@ def context(db_conn):
 
 class TestToolDefinitions:
     def test_all_tools_have_spec(self):
-        assert len(TOOL_DEFINITIONS) == 13
+        assert len(TOOL_DEFINITIONS) == 14
         for defn in TOOL_DEFINITIONS:
             assert "toolSpec" in defn
             spec = defn["toolSpec"]
@@ -69,6 +69,7 @@ class TestToolDefinitions:
             "scan_anomalies_over_range",
             "attribute_cost_change",
             "get_cost_trend",
+            "explain_anomaly",
         }
 
 
@@ -1405,6 +1406,216 @@ class TestGetCostTrend:
                 "granularity": "hourly",
             },
             trend_context,
+        )
+        assert "error" in result
+
+
+class TestExplainAnomaly:
+    """Tests for the explain_anomaly tool."""
+
+    @pytest.fixture
+    def explainer_db(self):
+        """DB with 14 days stable, spike on Jan 15, then 3 days normal.
+
+        Daily cost summary: $100/day for Jan 1-14, $500 on Jan 15, $100 for Jan 16-18.
+        CUR data on Jan 15: BoxUsage $350, EBS $100, DataTransfer $50.
+        CUR data on Jan 1-14: BoxUsage $70/day, EBS $20/day, DataTransfer $10/day.
+        """
+        from datetime import date as d
+
+        conn = duckdb.connect(":memory:")
+        create_tables(conn)
+
+        # Baseline: Jan 1-14 at $100/day
+        for day in range(1, 15):
+            dt = d(2025, 1, day)
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonEC2', 'us-east-1', "
+                "100.0, 95.0, 88.0, 50, 10, 'cur')",
+                [dt],
+            )
+            # CUR line items for baseline
+            conn.execute(
+                "INSERT INTO cost_line_items "
+                "(usage_start_date, usage_account_id, product_code, "
+                "usage_type, operation, resource_id, unblended_cost, "
+                "usage_amount, line_item_type) "
+                "VALUES (?, '111111111111', 'AmazonEC2', "
+                "'BoxUsage:m5.xlarge', 'RunInstances', 'i-abc123', "
+                "70.0, 24.0, 'Usage')",
+                [dt],
+            )
+            conn.execute(
+                "INSERT INTO cost_line_items "
+                "(usage_start_date, usage_account_id, product_code, "
+                "usage_type, operation, resource_id, unblended_cost, "
+                "usage_amount, line_item_type) "
+                "VALUES (?, '111111111111', 'AmazonEC2', "
+                "'EBS:VolumeUsage.gp3', 'CreateVolume', 'vol-001', "
+                "20.0, 500.0, 'Usage')",
+                [dt],
+            )
+            conn.execute(
+                "INSERT INTO cost_line_items "
+                "(usage_start_date, usage_account_id, product_code, "
+                "usage_type, operation, resource_id, unblended_cost, "
+                "usage_amount, line_item_type) "
+                "VALUES (?, '111111111111', 'AmazonEC2', "
+                "'DataTransfer-Out-Bytes', 'InterZone-Out', '', "
+                "10.0, 100.0, 'Usage')",
+                [dt],
+            )
+
+        # Spike day: Jan 15 at $500
+        conn.execute(
+            "INSERT INTO daily_cost_summary VALUES "
+            "('2025-01-15', '111111111111', 'AmazonEC2', 'us-east-1', "
+            "500.0, 475.0, 440.0, 250, 50, 'cur')"
+        )
+        # CUR line items for spike day
+        conn.execute(
+            "INSERT INTO cost_line_items "
+            "(usage_start_date, usage_account_id, product_code, "
+            "usage_type, operation, resource_id, unblended_cost, "
+            "usage_amount, line_item_type) "
+            "VALUES ('2025-01-15', '111111111111', 'AmazonEC2', "
+            "'BoxUsage:m5.xlarge', 'RunInstances', 'i-abc123', "
+            "350.0, 120.0, 'Usage')"
+        )
+        conn.execute(
+            "INSERT INTO cost_line_items "
+            "(usage_start_date, usage_account_id, product_code, "
+            "usage_type, operation, resource_id, unblended_cost, "
+            "usage_amount, line_item_type) "
+            "VALUES ('2025-01-15', '111111111111', 'AmazonEC2', "
+            "'EBS:VolumeUsage.gp3', 'CreateVolume', 'vol-001', "
+            "100.0, 2500.0, 'Usage')"
+        )
+        conn.execute(
+            "INSERT INTO cost_line_items "
+            "(usage_start_date, usage_account_id, product_code, "
+            "usage_type, operation, resource_id, unblended_cost, "
+            "usage_amount, line_item_type) "
+            "VALUES ('2025-01-15', '111111111111', 'AmazonEC2', "
+            "'DataTransfer-Out-Bytes', 'InterZone-Out', '', "
+            "50.0, 500.0, 'Usage')"
+        )
+
+        # After spike: Jan 16-18 back to normal $100
+        for day in range(16, 19):
+            dt = d(2025, 1, day)
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonEC2', 'us-east-1', "
+                "100.0, 95.0, 88.0, 50, 10, 'cur')",
+                [dt],
+            )
+
+        return conn
+
+    @pytest.fixture
+    def explainer_context(self, explainer_db):
+        return ToolContext(db_conn=explainer_db, aws_region="us-east-1")
+
+    def test_basic_explanation(self, explainer_context):
+        result = execute_tool(
+            "explain_anomaly",
+            {"service": "AmazonEC2", "anomaly_date": "2025-01-15"},
+            explainer_context,
+        )
+        assert "error" not in result
+        assert result["service"] == "AmazonEC2"
+        assert result["anomaly_cost"] == 500.0
+        assert result["baseline"]["median_cost"] == 100.0
+        assert result["cost_multiple"] == 5.0
+        assert result["cost_vs_median"] == 400.0
+        assert result["has_baseline"] is True
+        assert "summary" in result
+
+    def test_ongoing_detection(self, explainer_context):
+        """Costs returned to normal, so is_ongoing should be False."""
+        result = execute_tool(
+            "explain_anomaly",
+            {"service": "AmazonEC2", "anomaly_date": "2025-01-15"},
+            explainer_context,
+        )
+        assert "error" not in result
+        assert result["is_ongoing"] is False
+        assert result["days_after_checked"] == 3
+        assert result["elevated_days_after"] == 0
+
+    def test_cur_usage_type_changes(self, explainer_context):
+        result = execute_tool(
+            "explain_anomaly",
+            {"service": "AmazonEC2", "anomaly_date": "2025-01-15"},
+            explainer_context,
+        )
+        assert "error" not in result
+        assert result["has_cur_data"] is True
+        changes = result["top_usage_type_changes"]
+        assert len(changes) > 0
+        # BoxUsage should be the biggest change
+        ut_names = [c["usage_type"] for c in changes]
+        assert any("Box" in ut for ut in ut_names)
+
+    def test_no_cur_graceful(self, explainer_context):
+        """explain_anomaly should work without CUR data (summary only)."""
+        # Jan 1 has both summary and CUR data, but we test a service
+        # that only has summary data
+        conn = explainer_context.db_conn
+        conn.execute(
+            "INSERT INTO daily_cost_summary VALUES "
+            "('2025-01-15', '111111111111', 'AmazonRDS', 'us-east-1', "
+            "200.0, 190.0, 176.0, 50, 10, 'cur')"
+        )
+        # Add baseline for RDS
+        from datetime import date as d
+        for day in range(1, 15):
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonRDS', 'us-east-1', "
+                "50.0, 47.5, 44.0, 10, 3, 'cur')",
+                [d(2025, 1, day)],
+            )
+
+        result = execute_tool(
+            "explain_anomaly",
+            {"service": "AmazonRDS", "anomaly_date": "2025-01-15"},
+            explainer_context,
+        )
+        assert "error" not in result
+        assert result["has_cur_data"] is False
+        assert result["top_usage_type_changes"] == []
+        assert result["anomaly_cost"] == 200.0
+
+    def test_no_data_error(self, explainer_context):
+        result = execute_tool(
+            "explain_anomaly",
+            {"service": "AWSLambda", "anomaly_date": "2025-01-15"},
+            explainer_context,
+        )
+        assert "error" in result
+        assert "No data" in result["error"]
+
+    def test_account_filter(self, explainer_context):
+        result = execute_tool(
+            "explain_anomaly",
+            {
+                "service": "AmazonEC2",
+                "anomaly_date": "2025-01-15",
+                "account_id": "111111111111",
+            },
+            explainer_context,
+        )
+        assert "error" not in result
+        assert result["account_id"] == "111111111111"
+
+    def test_invalid_date(self, explainer_context):
+        result = execute_tool(
+            "explain_anomaly",
+            {"service": "AmazonEC2", "anomaly_date": "not-a-date"},
+            explainer_context,
         )
         assert "error" in result
 
