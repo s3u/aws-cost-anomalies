@@ -340,6 +340,121 @@ COMPARE_PERIODS_SPEC: dict = {
 }
 
 
+DRILL_DOWN_COST_SPIKE_SPEC: dict = {
+    "toolSpec": {
+        "name": "drill_down_cost_spike",
+        "description": (
+            "Break down a cost spike for a specific service by "
+            "usage_type, operation, and resource_id. Requires CUR "
+            "data in the cost_line_items table. Use after detecting "
+            "an anomaly to understand *why* costs changed."
+        ),
+        "inputSchema": {
+            "json": {
+                "type": "object",
+                "properties": {
+                    "service": {
+                        "type": "string",
+                        "description": (
+                            "AWS product_code to drill into "
+                            "(e.g. 'AmazonEC2')."
+                        ),
+                    },
+                    "date_start": {
+                        "type": "string",
+                        "description": (
+                            "Start date (YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "date_end": {
+                        "type": "string",
+                        "description": (
+                            "End date (YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "account_id": {
+                        "type": "string",
+                        "description": (
+                            "Optional AWS account ID to filter by."
+                        ),
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "description": (
+                            "Number of top items per breakdown. "
+                            "Default 10."
+                        ),
+                    },
+                },
+                "required": ["service", "date_start", "date_end"],
+            }
+        },
+    }
+}
+
+SCAN_ANOMALIES_OVER_RANGE_SPEC: dict = {
+    "toolSpec": {
+        "name": "scan_anomalies_over_range",
+        "description": (
+            "Scan a historical date range for cost anomalies. "
+            "Runs anomaly detection day-by-day across the range "
+            "and returns deduplicated results. Use when the user "
+            "asks about past anomalies or wants to find anomalies "
+            "in a specific time period (not just today)."
+        ),
+        "inputSchema": {
+            "json": {
+                "type": "object",
+                "properties": {
+                    "scan_start": {
+                        "type": "string",
+                        "description": (
+                            "First day to scan (YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "scan_end": {
+                        "type": "string",
+                        "description": (
+                            "Last day to scan (YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": (
+                            "Rolling window size for each day's "
+                            "detection. Default 14."
+                        ),
+                    },
+                    "sensitivity": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                        "description": (
+                            "Detection sensitivity. Default medium."
+                        ),
+                    },
+                    "group_by": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "product_code",
+                                "usage_account_id",
+                                "region",
+                            ],
+                        },
+                        "description": (
+                            "Dimensions to group by. "
+                            "Default ['product_code']."
+                        ),
+                    },
+                },
+                "required": ["scan_start", "scan_end"],
+            }
+        },
+    }
+}
+
+
 DETECT_COST_ANOMALIES_SPEC: dict = {
     "toolSpec": {
         "name": "detect_cost_anomalies",
@@ -407,6 +522,8 @@ TOOL_DEFINITIONS: list[dict] = [
     INGEST_COST_EXPLORER_SPEC,
     INGEST_CUR_DATA_SPEC,
     COMPARE_PERIODS_SPEC,
+    DRILL_DOWN_COST_SPIKE_SPEC,
+    SCAN_ANOMALIES_OVER_RANGE_SPEC,
 ]
 
 
@@ -1043,6 +1160,133 @@ def _execute_compare_periods(
     }
 
 
+def _execute_drill_down_cost_spike(
+    tool_input: dict, context: ToolContext
+) -> dict:
+    """Drill down into a cost spike by usage_type, operation, resource."""
+    from aws_cost_anomalies.analysis.drilldown import drill_down_cost_spike
+
+    service = tool_input.get("service", "")
+    if not service:
+        return {"error": "service is required."}
+
+    try:
+        d_start = date.fromisoformat(tool_input["date_start"])
+        d_end = date.fromisoformat(tool_input["date_end"])
+    except (KeyError, ValueError) as e:
+        return {"error": f"Invalid or missing date: {e}"}
+
+    account_id = tool_input.get("account_id")
+    top_n = tool_input.get("top_n", 10)
+
+    try:
+        result = drill_down_cost_spike(
+            context.db_conn,
+            service=service,
+            date_start=d_start,
+            date_end=d_end,
+            account_id=account_id,
+            top_n=top_n,
+        )
+    except ValueError as e:
+        return {"error": str(e)}
+
+    return {
+        "service": result.service,
+        "date_range": f"{d_start.isoformat()} to {d_end.isoformat()}",
+        "account_id": result.account_id,
+        "total_cost": result.total_cost,
+        "breakdown_by_usage_type": result.breakdown_by_usage_type,
+        "breakdown_by_operation": result.breakdown_by_operation,
+        "top_resources": result.top_resources,
+        "summary": (
+            f"${result.total_cost:,.2f} total for {result.service} "
+            f"({d_start} to {d_end}). "
+            f"Top usage type: {result.breakdown_by_usage_type[0]['usage_type'] if result.breakdown_by_usage_type else 'N/A'}."
+        ),
+    }
+
+
+def _execute_scan_anomalies_over_range(
+    tool_input: dict, context: ToolContext
+) -> dict:
+    """Scan a date range for historical anomalies."""
+    from aws_cost_anomalies.analysis.anomalies import scan_anomalies
+
+    try:
+        s_start = date.fromisoformat(tool_input["scan_start"])
+        s_end = date.fromisoformat(tool_input["scan_end"])
+    except (KeyError, ValueError) as e:
+        return {"error": f"Invalid or missing date: {e}"}
+
+    # Use config defaults if available, allow tool_input to override
+    default_days = 14
+    default_sensitivity = "medium"
+    drift_threshold = 0.20
+    if context.settings:
+        default_days = context.settings.anomaly.rolling_window_days
+        drift_threshold = context.settings.anomaly.drift_threshold_pct / 100.0
+        z_thresh = context.settings.anomaly.z_score_threshold
+        if z_thresh >= 3.0:
+            default_sensitivity = "low"
+        elif z_thresh >= 2.5:
+            default_sensitivity = "medium"
+        else:
+            default_sensitivity = "high"
+
+    days = tool_input.get("days", default_days)
+    sensitivity = tool_input.get("sensitivity", default_sensitivity)
+    group_by = tool_input.get("group_by", ["product_code"])
+
+    try:
+        result = scan_anomalies(
+            context.db_conn,
+            scan_start=s_start,
+            scan_end=s_end,
+            days=days,
+            group_by=group_by,
+            sensitivity=sensitivity,
+            drift_threshold=drift_threshold,
+        )
+    except ValueError as e:
+        return {"error": str(e)}
+
+    anomalies_out = []
+    for a in result.anomalies:
+        entry: dict[str, Any] = {
+            "usage_date": str(a.usage_date),
+            "group_by": a.group_by,
+            "group_value": a.group_value,
+            "current_cost": round(a.current_cost, 2),
+            "median_cost": round(a.median_cost, 2),
+            "mad": round(a.mad, 4),
+            "z_score": round(a.z_score, 2),
+            "severity": a.severity,
+            "direction": a.direction,
+            "kind": a.kind,
+        }
+        if a.kind == "trend":
+            entry["drift_pct"] = round(a.z_score * 100, 1)
+        anomalies_out.append(entry)
+
+    return {
+        "scan_start": s_start.isoformat(),
+        "scan_end": s_end.isoformat(),
+        "days_scanned": result.days_scanned,
+        "anomaly_count": len(anomalies_out),
+        "anomalies": anomalies_out,
+        "parameters": {
+            "days": days,
+            "sensitivity": sensitivity,
+            "group_by": group_by,
+        },
+        "summary": (
+            f"{len(anomalies_out)} anomalies found scanning "
+            f"{s_start} to {s_end} ({result.days_scanned} days)."
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Executor registry and dispatch
 # ---------------------------------------------------------------------------
@@ -1057,6 +1301,8 @@ _EXECUTORS: dict[str, Callable[[dict, ToolContext], dict]] = {
     "ingest_cost_explorer_data": _execute_ingest_cost_explorer,
     "ingest_cur_data": _execute_ingest_cur_data,
     "compare_periods": _execute_compare_periods,
+    "drill_down_cost_spike": _execute_drill_down_cost_spike,
+    "scan_anomalies_over_range": _execute_scan_anomalies_over_range,
 }
 
 

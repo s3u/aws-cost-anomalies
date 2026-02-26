@@ -78,6 +78,7 @@ def detect_anomalies(
     min_daily_cost: float = 1.0,
     drift_threshold: float = 0.20,
     data_source: str | None = None,
+    reference_date: date | None = None,
 ) -> list[Anomaly]:
     """Detect cost anomalies using robust statistics over a rolling window.
 
@@ -92,6 +93,7 @@ def detect_anomalies(
         min_daily_cost: Minimum daily cost to consider
         drift_threshold: Fractional drift over window to flag (0.20 = 20%)
         data_source: Filter by data source ('cur' or 'cost_explorer'). None = all.
+        reference_date: The "current" date for detection. Defaults to today (UTC).
 
     Returns list of detected anomalies, sorted by |z_score| descending.
     """
@@ -108,14 +110,15 @@ def detect_anomalies(
             raise ValueError(f"group_by must be one of {valid_groups}")
 
     threshold = SENSITIVITY_THRESHOLDS.get(sensitivity, 2.5)
-    cutoff = datetime.now(timezone.utc).date() - timedelta(days=days)
+    ref_date = reference_date or datetime.now(timezone.utc).date()
+    cutoff = ref_date - timedelta(days=days)
 
     select_cols = ", ".join(group_cols)
     group_clause = ", ".join(group_cols)
     group_by_label = "+".join(group_cols)
 
     source_filter = ""
-    params: list = [cutoff]
+    params: list = [cutoff, ref_date]
     if data_source:
         source_filter = " AND data_source = ?"
         params.append(data_source)
@@ -124,7 +127,7 @@ def detect_anomalies(
         f"""
         SELECT {select_cols}, usage_date, SUM(total_unblended_cost) AS daily_cost
         FROM daily_cost_summary
-        WHERE usage_date >= ?{source_filter}
+        WHERE usage_date >= ? AND usage_date <= ?{source_filter}
         GROUP BY {group_clause}, usage_date
         ORDER BY {group_clause}, usage_date
         """,
@@ -211,3 +214,112 @@ def detect_anomalies(
     _severity_rank = {"critical": 0, "warning": 1, "info": 2}
     anomalies.sort(key=lambda a: (_severity_rank.get(a.severity, 9), -abs(a.z_score)))
     return anomalies
+
+
+# ---------------------------------------------------------------------------
+# Historical anomaly scanning
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ScanResult:
+    scan_start: date
+    scan_end: date
+    anomalies: list[Anomaly]
+    days_scanned: int
+
+
+def scan_anomalies(
+    conn: duckdb.DuckDBPyConnection,
+    scan_start: date,
+    scan_end: date,
+    days: int = 14,
+    group_by: str | list[str] = "product_code",
+    sensitivity: str = "medium",
+    min_daily_cost: float = 1.0,
+    drift_threshold: float = 0.20,
+    data_source: str | None = None,
+) -> ScanResult:
+    """Scan a date range for anomalies by running detection on each day.
+
+    Iterates day-by-day from scan_start to scan_end, calling
+    detect_anomalies with reference_date=day. Deduplicates
+    consecutive-day anomalies for the same (group_value, kind),
+    keeping the one with the highest |z_score|.
+
+    Args:
+        conn: DuckDB connection
+        scan_start: First day to scan (inclusive)
+        scan_end: Last day to scan (inclusive)
+        days: Rolling window size for each detection
+        group_by: Dimension(s) to group by
+        sensitivity: Detection sensitivity
+        min_daily_cost: Minimum daily cost to consider
+        drift_threshold: Fractional drift threshold
+        data_source: Filter by data source
+
+    Returns:
+        ScanResult with deduplicated anomalies and scan metadata.
+
+    Raises:
+        ValueError: If scan_start > scan_end.
+    """
+    if scan_start > scan_end:
+        raise ValueError(
+            f"scan_start ({scan_start}) must be <= scan_end ({scan_end})"
+        )
+
+    # Track best anomaly per (group_value, kind) for consecutive runs.
+    # Key: (group_value, kind) → (Anomaly, last_date_seen)
+    active: dict[tuple[str, str], tuple[Anomaly, date]] = {}
+    finished: list[Anomaly] = []
+
+    days_scanned = 0
+    current = scan_start
+    while current <= scan_end:
+        days_scanned += 1
+        day_anomalies = detect_anomalies(
+            conn,
+            days=days,
+            group_by=group_by,
+            sensitivity=sensitivity,
+            min_daily_cost=min_daily_cost,
+            drift_threshold=drift_threshold,
+            data_source=data_source,
+            reference_date=current,
+        )
+
+        seen_today: set[tuple[str, str]] = set()
+        for a in day_anomalies:
+            key = (a.group_value, a.kind)
+            seen_today.add(key)
+
+            if key in active:
+                prev_anomaly, _ = active[key]
+                if abs(a.z_score) > abs(prev_anomaly.z_score):
+                    active[key] = (a, current)
+                else:
+                    active[key] = (prev_anomaly, current)
+            else:
+                active[key] = (a, current)
+
+        # Flush keys not seen today (streak broken)
+        for key in list(active):
+            if key not in seen_today:
+                finished.append(active.pop(key)[0])
+
+        current += timedelta(days=1)
+
+    # Flush remaining active streaks
+    for anomaly, _ in active.values():
+        finished.append(anomaly)
+
+    _severity_rank = {"critical": 0, "warning": 1, "info": 2}
+    finished.sort(key=lambda a: (_severity_rank.get(a.severity, 9), -abs(a.z_score)))
+
+    return ScanResult(
+        scan_start=scan_start,
+        scan_end=scan_end,
+        anomalies=finished,
+        days_scanned=days_scanned,
+    )

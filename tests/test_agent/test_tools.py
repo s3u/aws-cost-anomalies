@@ -45,7 +45,7 @@ def context(db_conn):
 
 class TestToolDefinitions:
     def test_all_tools_have_spec(self):
-        assert len(TOOL_DEFINITIONS) == 9
+        assert len(TOOL_DEFINITIONS) == 11
         for defn in TOOL_DEFINITIONS:
             assert "toolSpec" in defn
             spec = defn["toolSpec"]
@@ -65,6 +65,8 @@ class TestToolDefinitions:
             "ingest_cost_explorer_data",
             "ingest_cur_data",
             "compare_periods",
+            "drill_down_cost_spike",
+            "scan_anomalies_over_range",
         }
 
 
@@ -807,6 +809,262 @@ class TestComparePeriods:
         assert result["period_a"]["total_cost"] == 0.0
         assert result["period_b"]["total_cost"] == 0.0
         assert result["top_movers"] == []
+
+
+class TestDrillDownCostSpike:
+    """Tests for the drill_down_cost_spike tool executor."""
+
+    @pytest.fixture
+    def drilldown_db(self):
+        """DB with cost_line_items data for drill-down tests."""
+        from datetime import date as d
+
+        conn = duckdb.connect(":memory:")
+        create_tables(conn)
+
+        # Insert varied cost_line_items for AmazonEC2
+        items = [
+            # (usage_start, account, product, usage_type, operation, resource_id, cost, usage_amount)
+            (d(2025, 1, 15), "111111111111", "AmazonEC2", "BoxUsage:m5.xlarge", "RunInstances", "i-abc123", 80.0, 24.0),
+            (d(2025, 1, 15), "111111111111", "AmazonEC2", "BoxUsage:m5.xlarge", "RunInstances", "i-abc456", 60.0, 24.0),
+            (d(2025, 1, 15), "111111111111", "AmazonEC2", "BoxUsage:c5.2xlarge", "RunInstances", "i-def789", 120.0, 24.0),
+            (d(2025, 1, 15), "111111111111", "AmazonEC2", "EBS:VolumeUsage.gp3", "CreateVolume", "", 15.0, 500.0),
+            (d(2025, 1, 15), "111111111111", "AmazonEC2", "DataTransfer-Out-Bytes", "InterZone-Out", "", 25.0, 100.0),
+            # Different account
+            (d(2025, 1, 15), "222222222222", "AmazonEC2", "BoxUsage:t3.micro", "RunInstances", "i-xyz111", 5.0, 24.0),
+            # Different service (S3) — should not appear in EC2 drill-down
+            (d(2025, 1, 15), "111111111111", "AmazonS3", "TimedStorage-ByteHrs", "StandardStorage", "", 10.0, 50000.0),
+        ]
+        for item in items:
+            conn.execute(
+                "INSERT INTO cost_line_items "
+                "(usage_start_date, usage_account_id, product_code, "
+                "usage_type, operation, resource_id, unblended_cost, "
+                "usage_amount, line_item_type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Usage')",
+                list(item),
+            )
+        return conn
+
+    @pytest.fixture
+    def drilldown_context(self, drilldown_db):
+        return ToolContext(db_conn=drilldown_db, aws_region="us-east-1")
+
+    def test_basic_drill_down(self, drilldown_context):
+        result = execute_tool(
+            "drill_down_cost_spike",
+            {
+                "service": "AmazonEC2",
+                "date_start": "2025-01-15",
+                "date_end": "2025-01-15",
+            },
+            drilldown_context,
+        )
+        assert "error" not in result
+        assert result["service"] == "AmazonEC2"
+        assert result["total_cost"] > 0
+
+        # Should have usage_type breakdown
+        assert len(result["breakdown_by_usage_type"]) > 0
+        # BoxUsage types should dominate
+        usage_types = [b["usage_type"] for b in result["breakdown_by_usage_type"]]
+        assert any("BoxUsage" in ut for ut in usage_types)
+
+        # Should have operation breakdown
+        assert len(result["breakdown_by_operation"]) > 0
+
+        # Should have top resources (only non-empty resource_ids)
+        assert len(result["top_resources"]) > 0
+        for r in result["top_resources"]:
+            assert r["resource_id"] != ""
+
+        # pct_of_total should add up reasonably
+        total_pct = sum(b["pct_of_total"] for b in result["breakdown_by_usage_type"])
+        assert 99.0 <= total_pct <= 101.0
+
+        # Summary string present
+        assert "summary" in result
+
+    def test_no_cur_data_error(self, drilldown_context):
+        result = execute_tool(
+            "drill_down_cost_spike",
+            {
+                "service": "AmazonRDS",
+                "date_start": "2025-01-15",
+                "date_end": "2025-01-15",
+            },
+            drilldown_context,
+        )
+        assert "error" in result
+        assert "No CUR data" in result["error"]
+
+    def test_account_filter(self, drilldown_context):
+        result = execute_tool(
+            "drill_down_cost_spike",
+            {
+                "service": "AmazonEC2",
+                "date_start": "2025-01-15",
+                "date_end": "2025-01-15",
+                "account_id": "111111111111",
+            },
+            drilldown_context,
+        )
+        assert "error" not in result
+        assert result["account_id"] == "111111111111"
+        # Total should be 80+60+120+15+25 = 300 (only account 111)
+        assert result["total_cost"] == 300.0
+
+    def test_invalid_dates(self, drilldown_context):
+        result = execute_tool(
+            "drill_down_cost_spike",
+            {
+                "service": "AmazonEC2",
+                "date_start": "2025-01-20",
+                "date_end": "2025-01-15",
+            },
+            drilldown_context,
+        )
+        assert "error" in result
+
+    def test_invalid_date_format(self, drilldown_context):
+        result = execute_tool(
+            "drill_down_cost_spike",
+            {
+                "service": "AmazonEC2",
+                "date_start": "not-a-date",
+                "date_end": "2025-01-15",
+            },
+            drilldown_context,
+        )
+        assert "error" in result
+
+    def test_missing_service(self, drilldown_context):
+        result = execute_tool(
+            "drill_down_cost_spike",
+            {
+                "date_start": "2025-01-15",
+                "date_end": "2025-01-15",
+            },
+            drilldown_context,
+        )
+        assert "error" in result
+
+
+class TestScanAnomaliesOverRange:
+    """Tests for the scan_anomalies_over_range tool executor."""
+
+    @pytest.fixture
+    def scan_db(self):
+        """DB with 30 days of data and a spike on day 15."""
+        from datetime import date as d, timedelta
+
+        conn = duckdb.connect(":memory:")
+        create_tables(conn)
+
+        base_date = d(2025, 1, 1)
+        for day_offset in range(30):
+            usage_date = base_date + timedelta(days=day_offset)
+            # Stable EC2 at $100/day, spike to $500 on Jan 15
+            ec2_cost = 500.0 if usage_date == d(2025, 1, 15) else 100.0
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonEC2', 'us-east-1', "
+                "?, 95.0, 88.0, 50, 10, 'cur')",
+                [usage_date, ec2_cost],
+            )
+            # Stable S3 at $20/day
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonS3', 'us-east-1', "
+                "20.0, 19.0, 17.6, 1000, 5, 'cur')",
+                [usage_date],
+            )
+        return conn
+
+    @pytest.fixture
+    def scan_context(self, scan_db):
+        return ToolContext(db_conn=scan_db, aws_region="us-east-1")
+
+    def test_finds_historical_spike(self, scan_context):
+        result = execute_tool(
+            "scan_anomalies_over_range",
+            {
+                "scan_start": "2025-01-10",
+                "scan_end": "2025-01-20",
+            },
+            scan_context,
+        )
+        assert "error" not in result
+        assert result["anomaly_count"] >= 1
+
+        # Should find the EC2 spike
+        ec2_anomalies = [
+            a for a in result["anomalies"]
+            if a["group_value"] == "AmazonEC2"
+            and a["kind"] == "point"
+        ]
+        assert len(ec2_anomalies) >= 1
+        assert ec2_anomalies[0]["direction"] == "spike"
+
+        # Should report scan metadata
+        assert result["days_scanned"] == 11
+        assert "summary" in result
+
+    def test_no_anomalies_in_flat_range(self, scan_context):
+        result = execute_tool(
+            "scan_anomalies_over_range",
+            {
+                "scan_start": "2025-01-20",
+                "scan_end": "2025-01-28",
+            },
+            scan_context,
+        )
+        assert "error" not in result
+        # No spike in this range, should find no point anomalies
+        point_anomalies = [
+            a for a in result["anomalies"] if a["kind"] == "point"
+        ]
+        assert len(point_anomalies) == 0
+
+    def test_invalid_dates(self, scan_context):
+        result = execute_tool(
+            "scan_anomalies_over_range",
+            {
+                "scan_start": "2025-01-20",
+                "scan_end": "2025-01-10",
+            },
+            scan_context,
+        )
+        assert "error" in result
+
+    def test_invalid_date_format(self, scan_context):
+        result = execute_tool(
+            "scan_anomalies_over_range",
+            {
+                "scan_start": "bad-date",
+                "scan_end": "2025-01-20",
+            },
+            scan_context,
+        )
+        assert "error" in result
+
+    def test_summary_structure(self, scan_context):
+        result = execute_tool(
+            "scan_anomalies_over_range",
+            {
+                "scan_start": "2025-01-15",
+                "scan_end": "2025-01-15",
+                "sensitivity": "high",
+                "group_by": ["product_code"],
+            },
+            scan_context,
+        )
+        assert "error" not in result
+        assert result["scan_start"] == "2025-01-15"
+        assert result["scan_end"] == "2025-01-15"
+        assert result["days_scanned"] == 1
+        assert result["parameters"]["sensitivity"] == "high"
+        assert result["parameters"]["group_by"] == ["product_code"]
 
 
 class TestUnknownTool:

@@ -32,6 +32,10 @@ You have access to these tools:
 
 9. **compare_periods** -- Compare costs between two time periods. Returns total change, top movers (biggest cost increases/decreases), and items that appeared or disappeared. Use when the user asks to compare months, weeks, or any two date ranges.
 
+10. **drill_down_cost_spike** -- Break down a cost spike for a specific service by usage_type, operation, and resource_id. Requires CUR data in cost_line_items. Use after detecting an anomaly to explain *why* costs changed — which usage types, operations, or resources drove the increase.
+
+11. **scan_anomalies_over_range** -- Scan a historical date range for cost anomalies. Runs detection day-by-day and returns deduplicated results. Use when the user asks about past anomalies or wants to find anomalies in a specific time period (e.g. "Were there any anomalies in January?").
+
 ## Database Schema
 
 You have access to a DuckDB database with the following tables:

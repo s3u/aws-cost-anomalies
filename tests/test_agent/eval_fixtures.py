@@ -300,6 +300,114 @@ def eval_db_recent() -> duckdb.DuckDBPyConnection:
 
 
 @pytest.fixture
+def eval_db_with_cur_data() -> duckdb.DuckDBPyConnection:
+    """In-memory DuckDB with CUR line items and a rebuilt daily summary.
+
+    14 days ending today. Account 111 has an EC2 5× spike on the last day.
+    Line items have varied usage_types, operations, and resource_ids to
+    enable drill-down testing.
+    """
+    today = datetime.now(timezone.utc).date()
+    conn = get_connection(":memory:")
+    create_tables(conn)
+
+    # Usage type / operation / resource combos for EC2
+    ec2_items = [
+        ("BoxUsage:m5.xlarge", "RunInstances", "i-prod001", 40.0, 24.0),
+        ("BoxUsage:c5.2xlarge", "RunInstances", "i-prod002", 30.0, 24.0),
+        ("EBS:VolumeUsage.gp3", "CreateVolume", "", 10.0, 500.0),
+        ("DataTransfer-Out-Bytes", "InterZone-Out", "", 5.0, 100.0),
+    ]
+
+    for day_offset in range(13, -1, -1):
+        usage_date = today - timedelta(days=day_offset)
+        is_last_day = day_offset == 0
+
+        for acct in ACCOUNTS:
+            # EC2 line items
+            spike = (
+                SPIKE_MULTIPLIER if is_last_day and acct == SPIKE_ACCOUNT else 1.0
+            )
+            for usage_type, operation, resource_id, base_cost, usage_amt in ec2_items:
+                cost = round(base_cost * spike, 2)
+                conn.execute(
+                    "INSERT INTO cost_line_items "
+                    "(usage_start_date, usage_account_id, product_code, "
+                    "usage_type, operation, resource_id, unblended_cost, "
+                    "blended_cost, net_unblended_cost, usage_amount, "
+                    "line_item_type, region) "
+                    "VALUES (?, ?, 'AmazonEC2', ?, ?, ?, ?, ?, ?, ?, 'Usage', 'us-east-1')",
+                    [
+                        usage_date, acct, usage_type, operation,
+                        resource_id, cost, cost * 0.95, cost * 0.88,
+                        usage_amt,
+                    ],
+                )
+
+            # S3 line items (stable)
+            conn.execute(
+                "INSERT INTO cost_line_items "
+                "(usage_start_date, usage_account_id, product_code, "
+                "usage_type, operation, resource_id, unblended_cost, "
+                "blended_cost, net_unblended_cost, usage_amount, "
+                "line_item_type, region) "
+                "VALUES (?, ?, 'AmazonS3', 'TimedStorage-ByteHrs', "
+                "'StandardStorage', '', 15.0, 14.25, 13.2, 50000, "
+                "'Usage', 'us-east-1')",
+                [usage_date, acct],
+            )
+
+    # Rebuild daily_cost_summary from line items
+    from aws_cost_anomalies.storage.schema import rebuild_daily_summary
+    rebuild_daily_summary(conn)
+
+    return conn
+
+
+@pytest.fixture
+def eval_db_with_historical_spike() -> duckdb.DuckDBPyConnection:
+    """In-memory DuckDB with Jan 1-30 data and an EC2 5× spike on Jan 15.
+
+    Uses daily_cost_summary only (no line items needed for scan eval).
+    Account 111 EC2 spikes on Jan 15.
+    """
+    conn = get_connection(":memory:")
+    create_tables(conn)
+
+    base_date = date(2025, 1, 1)
+    spike_date = date(2025, 1, 15)
+
+    for day_offset in range(30):
+        usage_date = base_date + timedelta(days=day_offset)
+        for acct in ACCOUNTS:
+            for svc in SERVICES:
+                base = _BASE_COSTS[(acct, svc)]
+                multiplier = 1.0
+                if (
+                    usage_date == spike_date
+                    and svc == SPIKE_SERVICE
+                    and acct == SPIKE_ACCOUNT
+                ):
+                    multiplier = SPIKE_MULTIPLIER
+                for region in REGIONS:
+                    cost = round(
+                        base * _REGION_WEIGHTS[region] * multiplier, 2
+                    )
+                    conn.execute(
+                        """INSERT INTO daily_cost_summary
+                           (usage_date, usage_account_id, product_code,
+                            region, total_unblended_cost, total_blended_cost,
+                            total_usage_amount, line_item_count)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        [
+                            usage_date, acct, svc, region,
+                            cost, cost * 0.95, cost * 10, 1,
+                        ],
+                    )
+    return conn
+
+
+@pytest.fixture
 def eval_db_with_spike() -> duckdb.DuckDBPyConnection:
     """In-memory DuckDB with 14 days of cost data and an EC2 spike on the last day.
 

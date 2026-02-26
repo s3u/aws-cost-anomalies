@@ -35,11 +35,19 @@ from .eval_fixtures import (
     assert_valid_response,
     eval_db,  # noqa: F401 — pytest fixture import
     eval_db_recent,  # noqa: F401
+    eval_db_with_cur_data,  # noqa: F401
+    eval_db_with_historical_spike,  # noqa: F401
     eval_db_with_spike,  # noqa: F401
 )
 
 # Re-export fixtures so pytest discovers them in this module
-__all__ = ["eval_db", "eval_db_recent", "eval_db_with_spike"]
+__all__ = [
+    "eval_db",
+    "eval_db_recent",
+    "eval_db_with_cur_data",
+    "eval_db_with_historical_spike",
+    "eval_db_with_spike",
+]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -575,5 +583,77 @@ class TestAnomalyDrilldown:
         # Must identify the responsible account
         assert SPIKE_ACCOUNT in response.answer, (
             f"Expected account {SPIKE_ACCOUNT} identified as responsible.\n"
+            f"Answer: {response.answer[:500]}"
+        )
+
+
+# ============================================================================
+# Eval 14: Drill-Down Cost Spike
+# ============================================================================
+
+
+@pytest.mark.evals
+class TestDrillDownCostSpike:
+    """Verify the agent drills into a cost spike using usage_type/resource detail."""
+
+    def test_drill_down_ec2_spike(self, eval_db_with_cur_data):  # noqa: F811
+        """Agent should use drill_down_cost_spike and mention usage type details."""
+        response = _run(
+            "EC2 costs spiked today. Drill down to show what usage types "
+            "or resources caused it.",
+            eval_db_with_cur_data,
+        )
+
+        assert_valid_response(response)
+        assert_used_tool(response, "drill_down_cost_spike")
+
+        # Must mention EC2
+        assert_answer_contains(response, "EC2")
+
+        # Should mention usage type details (BoxUsage, EBS, DataTransfer, etc.)
+        answer_lower = response.answer.lower()
+        usage_indicators = [
+            "boxusage", "usage type", "usage_type",
+            "ebs", "datatransfer", "runinstances",
+            "m5", "c5", "volume",
+        ]
+        has_detail = any(ind in answer_lower for ind in usage_indicators)
+        assert has_detail, (
+            f"Expected usage type or resource detail in drill-down answer.\n"
+            f"Answer: {response.answer[:500]}"
+        )
+
+
+# ============================================================================
+# Eval 15: Scan Anomalies Over Range
+# ============================================================================
+
+
+@pytest.mark.evals
+class TestScanAnomaliesOverRange:
+    """Verify the agent can find historical anomalies using scan."""
+
+    def test_finds_january_anomaly(self, eval_db_with_historical_spike):  # noqa: F811
+        """Agent should use scan_anomalies_over_range and find the Jan 15 spike."""
+        response = _run(
+            "Were there any cost anomalies during January 2025?",
+            eval_db_with_historical_spike,
+        )
+
+        assert_valid_response(response)
+        assert_used_tool(response, "scan_anomalies_over_range")
+
+        # Must mention EC2
+        assert_answer_contains(response, "EC2")
+
+        # Should reference the spike around Jan 15
+        answer_lower = response.answer.lower()
+        date_indicators = [
+            "jan 15", "january 15", "2025-01-15", "15th",
+            "mid-jan", "mid jan", "middle of jan",
+        ]
+        has_date = any(ind in answer_lower for ind in date_indicators)
+        assert has_date, (
+            f"Expected reference to the spike around Jan 15.\n"
             f"Answer: {response.answer[:500]}"
         )
