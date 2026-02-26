@@ -138,6 +138,10 @@ def rebuild_daily_summary(
         placeholders = ", ".join(["?"] * len(_EXCLUDED_LINE_ITEM_TYPES))
         conn.execute(f"""
             INSERT INTO daily_cost_summary
+            (usage_date, usage_account_id, product_code, region,
+             total_unblended_cost, total_blended_cost,
+             total_net_amortized_cost, total_usage_amount,
+             line_item_count, data_source)
             SELECT
                 CAST(usage_start_date AS DATE) AS usage_date,
                 usage_account_id,
@@ -207,6 +211,10 @@ def insert_cost_explorer_summary(
         )
         conn.executemany(
             "INSERT INTO daily_cost_summary "
+            "(usage_date, usage_account_id, product_code, region, "
+            "total_unblended_cost, total_blended_cost, "
+            "total_net_amortized_cost, total_usage_amount, "
+            "line_item_count, data_source) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'cost_explorer')",
             rows,
         )
