@@ -30,6 +30,8 @@ You have access to these tools:
 
 8. **ingest_cur_data** -- Import CUR (Cost & Usage Report) data from S3 into the local database. Requires S3 configuration. Use when the user asks to import CUR data.
 
+9. **compare_periods** -- Compare costs between two time periods. Returns total change, top movers (biggest cost increases/decreases), and items that appeared or disappeared. Use when the user asks to compare months, weeks, or any two date ranges.
+
 ## Database Schema
 
 You have access to a DuckDB database with the following tables:

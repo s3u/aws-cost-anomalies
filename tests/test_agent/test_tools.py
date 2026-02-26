@@ -45,7 +45,7 @@ def context(db_conn):
 
 class TestToolDefinitions:
     def test_all_tools_have_spec(self):
-        assert len(TOOL_DEFINITIONS) == 8
+        assert len(TOOL_DEFINITIONS) == 9
         for defn in TOOL_DEFINITIONS:
             assert "toolSpec" in defn
             spec = defn["toolSpec"]
@@ -64,6 +64,7 @@ class TestToolDefinitions:
             "detect_cost_anomalies",
             "ingest_cost_explorer_data",
             "ingest_cur_data",
+            "compare_periods",
         }
 
 
@@ -666,6 +667,146 @@ class TestIngestCurData:
         )
         assert "error" in result
         assert "YYYY-MM" in result["error"]
+
+
+class TestComparePeriods:
+    """Tests for the compare_periods tool executor."""
+
+    @pytest.fixture
+    def comparison_db(self):
+        """DB with data across two periods for comparison tests."""
+        conn = duckdb.connect(":memory:")
+        create_tables(conn)
+
+        # Period A: Jan 1-7 — EC2 $100/day, S3 $20/day, RDS $50/day
+        for day in range(1, 8):
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonEC2', 'us-east-1', "
+                "100.0, 95.0, 88.0, 50, 10, 'cur')",
+                [f"2025-01-{day:02d}"],
+            )
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonS3', 'us-east-1', "
+                "20.0, 19.0, 17.6, 1000, 5, 'cur')",
+                [f"2025-01-{day:02d}"],
+            )
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonRDS', 'us-east-1', "
+                "50.0, 47.0, 44.0, 10, 3, 'cur')",
+                [f"2025-01-{day:02d}"],
+            )
+
+        # Period B: Jan 8-14 — EC2 $200/day (doubled), S3 $20/day (same)
+        # RDS gone, Lambda new at $30/day
+        for day in range(8, 15):
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonEC2', 'us-east-1', "
+                "200.0, 190.0, 176.0, 100, 20, 'cur')",
+                [f"2025-01-{day:02d}"],
+            )
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonS3', 'us-east-1', "
+                "20.0, 19.0, 17.6, 1000, 5, 'cur')",
+                [f"2025-01-{day:02d}"],
+            )
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AWSLambda', 'us-east-1', "
+                "30.0, 28.0, 26.4, 5000, 15, 'cur')",
+                [f"2025-01-{day:02d}"],
+            )
+
+        return conn
+
+    @pytest.fixture
+    def comparison_context(self, comparison_db):
+        return ToolContext(db_conn=comparison_db, aws_region="us-east-1")
+
+    def test_compare_periods_basic(self, comparison_context):
+        result = execute_tool(
+            "compare_periods",
+            {
+                "period_a_start": "2025-01-01",
+                "period_a_end": "2025-01-07",
+                "period_b_start": "2025-01-08",
+                "period_b_end": "2025-01-14",
+            },
+            comparison_context,
+        )
+        assert "error" not in result
+
+        # Period A: EC2 700 + S3 140 + RDS 350 = 1190
+        assert result["period_a"]["total_cost"] == 1190.0
+        # Period B: EC2 1400 + S3 140 + Lambda 210 = 1750
+        assert result["period_b"]["total_cost"] == 1750.0
+
+        # Total change
+        assert result["total_change"]["absolute"] == 560.0
+        assert result["total_change"]["percentage"] is not None
+
+        # Movers should include EC2 (present in both, changed)
+        mover_names = [m["group_value"] for m in result["top_movers"]]
+        assert "AmazonEC2" in mover_names
+
+        # Summary string present
+        assert "summary" in result
+
+    def test_compare_periods_new_and_disappeared(self, comparison_context):
+        result = execute_tool(
+            "compare_periods",
+            {
+                "period_a_start": "2025-01-01",
+                "period_a_end": "2025-01-07",
+                "period_b_start": "2025-01-08",
+                "period_b_end": "2025-01-14",
+            },
+            comparison_context,
+        )
+        assert "error" not in result
+
+        new_names = [n["group_value"] for n in result["new_in_period_b"]]
+        assert "AWSLambda" in new_names
+
+        gone_names = [g["group_value"] for g in result["gone_from_period_a"]]
+        assert "AmazonRDS" in gone_names
+
+    def test_compare_periods_invalid_dates(self, comparison_context):
+        result = execute_tool(
+            "compare_periods",
+            {
+                "period_a_start": "not-a-date",
+                "period_a_end": "2025-01-07",
+                "period_b_start": "2025-01-08",
+                "period_b_end": "2025-01-14",
+            },
+            comparison_context,
+        )
+        assert "error" in result
+
+    def test_compare_periods_empty_data(self):
+        """No data in range returns zeros gracefully."""
+        conn = duckdb.connect(":memory:")
+        create_tables(conn)
+        ctx = ToolContext(db_conn=conn, aws_region="us-east-1")
+        result = execute_tool(
+            "compare_periods",
+            {
+                "period_a_start": "2025-06-01",
+                "period_a_end": "2025-06-07",
+                "period_b_start": "2025-06-08",
+                "period_b_end": "2025-06-14",
+            },
+            ctx,
+        )
+        assert "error" not in result
+        assert result["period_a"]["total_cost"] == 0.0
+        assert result["period_b"]["total_cost"] == 0.0
+        assert result["top_movers"] == []
 
 
 class TestUnknownTool:

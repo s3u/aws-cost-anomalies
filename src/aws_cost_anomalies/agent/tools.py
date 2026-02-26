@@ -267,6 +267,79 @@ INGEST_CUR_DATA_SPEC: dict = {
 }
 
 
+COMPARE_PERIODS_SPEC: dict = {
+    "toolSpec": {
+        "name": "compare_periods",
+        "description": (
+            "Compare costs between two time periods, grouped by a "
+            "dimension (service, account, or region). Returns total "
+            "change, top movers (biggest cost increases/decreases), "
+            "and items that appeared or disappeared between periods."
+        ),
+        "inputSchema": {
+            "json": {
+                "type": "object",
+                "properties": {
+                    "period_a_start": {
+                        "type": "string",
+                        "description": (
+                            "Start date of the first period "
+                            "(YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "period_a_end": {
+                        "type": "string",
+                        "description": (
+                            "End date of the first period "
+                            "(YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "period_b_start": {
+                        "type": "string",
+                        "description": (
+                            "Start date of the second period "
+                            "(YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "period_b_end": {
+                        "type": "string",
+                        "description": (
+                            "End date of the second period "
+                            "(YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "group_by": {
+                        "type": "string",
+                        "enum": [
+                            "product_code",
+                            "usage_account_id",
+                            "region",
+                        ],
+                        "description": (
+                            "Dimension to group costs by. "
+                            "Default: product_code."
+                        ),
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "description": (
+                            "Number of top movers to return. "
+                            "Default 10."
+                        ),
+                    },
+                },
+                "required": [
+                    "period_a_start",
+                    "period_a_end",
+                    "period_b_start",
+                    "period_b_end",
+                ],
+            }
+        },
+    }
+}
+
+
 DETECT_COST_ANOMALIES_SPEC: dict = {
     "toolSpec": {
         "name": "detect_cost_anomalies",
@@ -333,6 +406,7 @@ TOOL_DEFINITIONS: list[dict] = [
     DETECT_COST_ANOMALIES_SPEC,
     INGEST_COST_EXPLORER_SPEC,
     INGEST_CUR_DATA_SPEC,
+    COMPARE_PERIODS_SPEC,
 ]
 
 
@@ -905,6 +979,70 @@ def _execute_detect_cost_anomalies(
     }
 
 
+def _execute_compare_periods(
+    tool_input: dict, context: ToolContext
+) -> dict:
+    """Compare costs between two time periods."""
+    from aws_cost_anomalies.analysis.comparison import compare_periods
+
+    # Parse dates
+    try:
+        pa_start = date.fromisoformat(tool_input["period_a_start"])
+        pa_end = date.fromisoformat(tool_input["period_a_end"])
+        pb_start = date.fromisoformat(tool_input["period_b_start"])
+        pb_end = date.fromisoformat(tool_input["period_b_end"])
+    except (KeyError, ValueError) as e:
+        return {"error": f"Invalid or missing date: {e}"}
+
+    group_by = tool_input.get("group_by", "product_code")
+    top_n = tool_input.get("top_n", 10)
+
+    try:
+        result = compare_periods(
+            context.db_conn,
+            pa_start, pa_end,
+            pb_start, pb_end,
+            group_by=group_by,
+            top_n=top_n,
+        )
+    except ValueError as e:
+        return {"error": str(e)}
+
+    total_abs = result.period_b_total - result.period_a_total
+    total_pct = (
+        (total_abs / result.period_a_total * 100)
+        if result.period_a_total
+        else None
+    )
+
+    return {
+        "period_a": {
+            "start": pa_start.isoformat(),
+            "end": pa_end.isoformat(),
+            "total_cost": result.period_a_total,
+        },
+        "period_b": {
+            "start": pb_start.isoformat(),
+            "end": pb_end.isoformat(),
+            "total_cost": result.period_b_total,
+        },
+        "total_change": {
+            "absolute": round(total_abs, 2),
+            "percentage": round(total_pct, 1) if total_pct is not None else None,
+        },
+        "top_movers": result.movers,
+        "new_in_period_b": result.new_in_b,
+        "gone_from_period_a": result.disappeared_from_a,
+        "summary": (
+            f"Total cost changed from ${result.period_a_total:,.2f} "
+            f"to ${result.period_b_total:,.2f} "
+            f"({'+' if total_abs >= 0 else ''}"
+            f"${total_abs:,.2f}"
+            f"{f', {total_pct:+.1f}%' if total_pct is not None else ''})."
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Executor registry and dispatch
 # ---------------------------------------------------------------------------
@@ -918,6 +1056,7 @@ _EXECUTORS: dict[str, Callable[[dict, ToolContext], dict]] = {
     "detect_cost_anomalies": _execute_detect_cost_anomalies,
     "ingest_cost_explorer_data": _execute_ingest_cost_explorer,
     "ingest_cur_data": _execute_ingest_cur_data,
+    "compare_periods": _execute_compare_periods,
 }
 
 
