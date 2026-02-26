@@ -118,6 +118,156 @@ def get_daily_trends(
     ]
 
 
+_SAFE_GROUP_COLUMNS = frozenset({"product_code", "usage_account_id", "region"})
+_VALID_GRANULARITIES = frozenset({"daily", "weekly", "monthly"})
+
+_GRANULARITY_TRUNC = {
+    "daily": "day",
+    "weekly": "week",
+    "monthly": "month",
+}
+
+
+@dataclass
+class CostTrendPoint:
+    usage_date: date
+    cost: float
+    group_value: str | None = None
+
+
+@dataclass
+class CostTrendResult:
+    date_start: date
+    date_end: date
+    granularity: str
+    group_by: str | None
+    filter_value: str | None
+    points: list[CostTrendPoint]
+    total: float
+    average: float
+    min_cost: float
+    max_cost: float
+
+
+def get_cost_trend(
+    conn: duckdb.DuckDBPyConnection,
+    date_start: date,
+    date_end: date,
+    group_by: str | None = None,
+    filter_value: str | None = None,
+    granularity: str = "daily",
+) -> CostTrendResult:
+    """Get a cost time series with optional grouping and filtering.
+
+    Args:
+        conn: DuckDB connection
+        date_start: Start date (inclusive)
+        date_end: End date (inclusive)
+        group_by: Optional column to group by
+        filter_value: Filter to a specific value of group_by
+        granularity: "daily", "weekly", or "monthly"
+
+    Returns:
+        CostTrendResult with data points and summary statistics.
+
+    Raises:
+        ValueError: If parameters are invalid.
+    """
+    if date_start > date_end:
+        raise ValueError(
+            f"date_start ({date_start}) must be <= date_end ({date_end})"
+        )
+
+    if granularity not in _VALID_GRANULARITIES:
+        raise ValueError(
+            f"granularity must be one of {sorted(_VALID_GRANULARITIES)}, "
+            f"got '{granularity}'"
+        )
+
+    if filter_value and not group_by:
+        raise ValueError(
+            "filter_value requires group_by to be specified."
+        )
+
+    if group_by and group_by not in _SAFE_GROUP_COLUMNS:
+        raise ValueError(
+            f"group_by must be one of {sorted(_SAFE_GROUP_COLUMNS)}, "
+            f"got '{group_by}'"
+        )
+
+    trunc_unit = _GRANULARITY_TRUNC[granularity]
+    params: list = [date_start, date_end]
+
+    filter_clause = ""
+    if filter_value and group_by:
+        filter_clause = f" AND {group_by} = ?"
+        params.append(filter_value)
+
+    if group_by:
+        column = group_by  # validated above
+        sql = f"""
+        SELECT DATE_TRUNC('{trunc_unit}', usage_date) AS period_date,
+               {column} AS group_value,
+               SUM(total_unblended_cost) AS cost
+        FROM daily_cost_summary
+        WHERE usage_date >= ? AND usage_date <= ?
+          {filter_clause}
+        GROUP BY period_date, {column}
+        ORDER BY period_date, {column}
+        """  # noqa: S608
+    else:
+        sql = f"""
+        SELECT DATE_TRUNC('{trunc_unit}', usage_date) AS period_date,
+               SUM(total_unblended_cost) AS cost
+        FROM daily_cost_summary
+        WHERE usage_date >= ? AND usage_date <= ?
+          {filter_clause}
+        GROUP BY period_date
+        ORDER BY period_date
+        """  # noqa: S608
+
+    rows = conn.execute(sql, params).fetchall()
+
+    points: list[CostTrendPoint] = []
+    costs: list[float] = []
+
+    for row in rows:
+        if group_by:
+            period_date, group_value, cost = row
+        else:
+            period_date, cost = row
+            group_value = None
+
+        cost_val = round(cost, 2)
+        # DuckDB DATE_TRUNC returns a timestamp; convert to date
+        if hasattr(period_date, "date"):
+            period_date = period_date.date()
+        points.append(CostTrendPoint(
+            usage_date=period_date,
+            cost=cost_val,
+            group_value=group_value,
+        ))
+        costs.append(cost_val)
+
+    total = round(sum(costs), 2) if costs else 0.0
+    average = round(total / len(costs), 2) if costs else 0.0
+    min_cost = round(min(costs), 2) if costs else 0.0
+    max_cost = round(max(costs), 2) if costs else 0.0
+
+    return CostTrendResult(
+        date_start=date_start,
+        date_end=date_end,
+        granularity=granularity,
+        group_by=group_by,
+        filter_value=filter_value,
+        points=points,
+        total=total,
+        average=average,
+        min_cost=min_cost,
+        max_cost=max_cost,
+    )
+
+
 def get_total_daily_costs(
     conn: duckdb.DuckDBPyConnection,
     days: int = 14,

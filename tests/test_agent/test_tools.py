@@ -45,7 +45,7 @@ def context(db_conn):
 
 class TestToolDefinitions:
     def test_all_tools_have_spec(self):
-        assert len(TOOL_DEFINITIONS) == 12
+        assert len(TOOL_DEFINITIONS) == 13
         for defn in TOOL_DEFINITIONS:
             assert "toolSpec" in defn
             spec = defn["toolSpec"]
@@ -68,6 +68,7 @@ class TestToolDefinitions:
             "drill_down_cost_spike",
             "scan_anomalies_over_range",
             "attribute_cost_change",
+            "get_cost_trend",
         }
 
 
@@ -1256,6 +1257,156 @@ class TestAttributeCostChange:
         )
         assert "error" in result
         assert "service is required" in result["error"]
+
+
+class TestGetCostTrend:
+    """Tests for the get_cost_trend tool — reuses comparison_db (Jan 1-14)."""
+
+    @pytest.fixture
+    def comparison_db(self):
+        """DB with data across two periods for trend tests."""
+        conn = duckdb.connect(":memory:")
+        create_tables(conn)
+
+        # Jan 1-7: EC2 $100/day, S3 $20/day
+        for day in range(1, 8):
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonEC2', 'us-east-1', "
+                "100.0, 95.0, 88.0, 50, 10, 'cur')",
+                [f"2025-01-{day:02d}"],
+            )
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonS3', 'us-east-1', "
+                "20.0, 19.0, 17.6, 1000, 5, 'cur')",
+                [f"2025-01-{day:02d}"],
+            )
+
+        # Jan 8-14: EC2 $200/day, S3 $20/day
+        for day in range(8, 15):
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonEC2', 'us-east-1', "
+                "200.0, 190.0, 176.0, 100, 20, 'cur')",
+                [f"2025-01-{day:02d}"],
+            )
+            conn.execute(
+                "INSERT INTO daily_cost_summary VALUES "
+                "(?, '111111111111', 'AmazonS3', 'us-east-1', "
+                "20.0, 19.0, 17.6, 1000, 5, 'cur')",
+                [f"2025-01-{day:02d}"],
+            )
+
+        return conn
+
+    @pytest.fixture
+    def trend_context(self, comparison_db):
+        return ToolContext(db_conn=comparison_db, aws_region="us-east-1")
+
+    def test_basic_daily_trend(self, trend_context):
+        result = execute_tool(
+            "get_cost_trend",
+            {"date_start": "2025-01-01", "date_end": "2025-01-14"},
+            trend_context,
+        )
+        assert "error" not in result
+        assert result["granularity"] == "daily"
+        assert len(result["points"]) == 14
+        assert result["stats"]["total"] > 0
+        assert result["stats"]["min"] <= result["stats"]["max"]
+        assert "summary" in result
+
+    def test_grouped_trend(self, trend_context):
+        result = execute_tool(
+            "get_cost_trend",
+            {
+                "date_start": "2025-01-01",
+                "date_end": "2025-01-14",
+                "group_by": "product_code",
+            },
+            trend_context,
+        )
+        assert "error" not in result
+        # Should have points for both EC2 and S3
+        groups = {p["group"] for p in result["points"]}
+        assert "AmazonEC2" in groups
+        assert "AmazonS3" in groups
+
+    def test_filtered_trend(self, trend_context):
+        result = execute_tool(
+            "get_cost_trend",
+            {
+                "date_start": "2025-01-01",
+                "date_end": "2025-01-14",
+                "group_by": "product_code",
+                "filter_value": "AmazonEC2",
+            },
+            trend_context,
+        )
+        assert "error" not in result
+        # All points should be EC2
+        for p in result["points"]:
+            assert p["group"] == "AmazonEC2"
+        assert result["filter_value"] == "AmazonEC2"
+
+    def test_weekly_granularity(self, trend_context):
+        result = execute_tool(
+            "get_cost_trend",
+            {
+                "date_start": "2025-01-01",
+                "date_end": "2025-01-14",
+                "granularity": "weekly",
+            },
+            trend_context,
+        )
+        assert "error" not in result
+        assert result["granularity"] == "weekly"
+        # Should have fewer points than daily
+        assert len(result["points"]) < 14
+
+    def test_empty_range(self, trend_context):
+        result = execute_tool(
+            "get_cost_trend",
+            {"date_start": "2024-06-01", "date_end": "2024-06-30"},
+            trend_context,
+        )
+        assert "error" not in result
+        assert len(result["points"]) == 0
+        assert result["stats"]["total"] == 0
+
+    def test_filter_without_group_by_error(self, trend_context):
+        result = execute_tool(
+            "get_cost_trend",
+            {
+                "date_start": "2025-01-01",
+                "date_end": "2025-01-14",
+                "filter_value": "AmazonEC2",
+            },
+            trend_context,
+        )
+        assert "error" in result
+        assert "group_by" in result["error"]
+
+    def test_invalid_dates(self, trend_context):
+        result = execute_tool(
+            "get_cost_trend",
+            {"date_start": "bad-date", "date_end": "2025-01-14"},
+            trend_context,
+        )
+        assert "error" in result
+
+    def test_invalid_granularity(self, trend_context):
+        result = execute_tool(
+            "get_cost_trend",
+            {
+                "date_start": "2025-01-01",
+                "date_end": "2025-01-14",
+                "granularity": "hourly",
+            },
+            trend_context,
+        )
+        assert "error" in result
 
 
 class TestUnknownTool:

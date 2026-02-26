@@ -580,6 +580,62 @@ ATTRIBUTE_COST_CHANGE_SPEC: dict = {
     }
 }
 
+GET_COST_TREND_SPEC: dict = {
+    "toolSpec": {
+        "name": "get_cost_trend",
+        "description": (
+            "Get a cost time series with optional grouping, filtering, "
+            "and granularity (daily/weekly/monthly). Returns data points "
+            "plus summary statistics (total, average, min, max)."
+        ),
+        "inputSchema": {
+            "json": {
+                "type": "object",
+                "properties": {
+                    "date_start": {
+                        "type": "string",
+                        "description": (
+                            "Start date (YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "date_end": {
+                        "type": "string",
+                        "description": (
+                            "End date (YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "group_by": {
+                        "type": "string",
+                        "enum": [
+                            "product_code",
+                            "usage_account_id",
+                            "region",
+                        ],
+                        "description": (
+                            "Optional dimension to group costs by."
+                        ),
+                    },
+                    "filter_value": {
+                        "type": "string",
+                        "description": (
+                            "Filter to a specific value of group_by "
+                            "(e.g. 'AmazonEC2'). Requires group_by."
+                        ),
+                    },
+                    "granularity": {
+                        "type": "string",
+                        "enum": ["daily", "weekly", "monthly"],
+                        "description": (
+                            "Time granularity. Default daily."
+                        ),
+                    },
+                },
+                "required": ["date_start", "date_end"],
+            }
+        },
+    }
+}
+
 
 # ---------------------------------------------------------------------------
 # Tool registry
@@ -598,6 +654,7 @@ TOOL_DEFINITIONS: list[dict] = [
     DRILL_DOWN_COST_SPIKE_SPEC,
     SCAN_ANOMALIES_OVER_RANGE_SPEC,
     ATTRIBUTE_COST_CHANGE_SPEC,
+    GET_COST_TREND_SPEC,
 ]
 
 
@@ -1454,6 +1511,66 @@ def _execute_attribute_cost_change(
     }
 
 
+def _execute_get_cost_trend(
+    tool_input: dict, context: ToolContext
+) -> dict:
+    """Get cost time series with optional grouping and filtering."""
+    from aws_cost_anomalies.analysis.trends import get_cost_trend
+
+    try:
+        d_start = date.fromisoformat(tool_input["date_start"])
+        d_end = date.fromisoformat(tool_input["date_end"])
+    except (KeyError, ValueError) as e:
+        return {"error": f"Invalid or missing date: {e}"}
+
+    group_by = tool_input.get("group_by")
+    filter_value = tool_input.get("filter_value")
+    granularity = tool_input.get("granularity", "daily")
+
+    try:
+        result = get_cost_trend(
+            context.db_conn,
+            date_start=d_start,
+            date_end=d_end,
+            group_by=group_by,
+            filter_value=filter_value,
+            granularity=granularity,
+        )
+    except ValueError as e:
+        return {"error": str(e)}
+
+    points = [
+        {
+            "date": str(p.usage_date),
+            "cost": p.cost,
+            "group": p.group_value,
+        }
+        for p in result.points
+    ]
+
+    return {
+        "date_start": d_start.isoformat(),
+        "date_end": d_end.isoformat(),
+        "granularity": result.granularity,
+        "group_by": result.group_by,
+        "filter_value": result.filter_value,
+        "points": points,
+        "stats": {
+            "total": result.total,
+            "average": result.average,
+            "min": result.min_cost,
+            "max": result.max_cost,
+        },
+        "summary": (
+            f"Cost trend from {d_start} to {d_end} "
+            f"({result.granularity}): "
+            f"total ${result.total:,.2f}, "
+            f"avg ${result.average:,.2f}/period, "
+            f"range ${result.min_cost:,.2f}–${result.max_cost:,.2f}."
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Executor registry and dispatch
 # ---------------------------------------------------------------------------
@@ -1471,6 +1588,7 @@ _EXECUTORS: dict[str, Callable[[dict, ToolContext], dict]] = {
     "drill_down_cost_spike": _execute_drill_down_cost_spike,
     "scan_anomalies_over_range": _execute_scan_anomalies_over_range,
     "attribute_cost_change": _execute_attribute_cost_change,
+    "get_cost_trend": _execute_get_cost_trend,
 }
 
 
