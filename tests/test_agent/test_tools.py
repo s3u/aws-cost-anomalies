@@ -45,7 +45,7 @@ def context(db_conn):
 
 class TestToolDefinitions:
     def test_all_tools_have_spec(self):
-        assert len(TOOL_DEFINITIONS) == 11
+        assert len(TOOL_DEFINITIONS) == 12
         for defn in TOOL_DEFINITIONS:
             assert "toolSpec" in defn
             spec = defn["toolSpec"]
@@ -67,6 +67,7 @@ class TestToolDefinitions:
             "compare_periods",
             "drill_down_cost_spike",
             "scan_anomalies_over_range",
+            "attribute_cost_change",
         }
 
 
@@ -1065,6 +1066,196 @@ class TestScanAnomaliesOverRange:
         assert result["days_scanned"] == 1
         assert result["parameters"]["sensitivity"] == "high"
         assert result["parameters"]["group_by"] == ["product_code"]
+
+
+class TestAttributeCostChange:
+    """Tests for the attribute_cost_change tool."""
+
+    @pytest.fixture
+    def attribution_db(self):
+        """DB with CUR data across two periods for attribution tests.
+
+        Period A (Jan 1-7): BoxUsage $80/day, EBS $15/day
+        Period B (Jan 8-14): BoxUsage $160/day (doubled), SpotUsage $40/day (new), EBS gone
+        """
+        from datetime import date as d
+
+        conn = duckdb.connect(":memory:")
+        create_tables(conn)
+
+        # Period A: Jan 1-7
+        for day in range(1, 8):
+            dt = d(2025, 1, day)
+            conn.execute(
+                "INSERT INTO cost_line_items "
+                "(usage_start_date, usage_account_id, product_code, "
+                "usage_type, operation, resource_id, unblended_cost, "
+                "usage_amount, line_item_type) "
+                "VALUES (?, '111111111111', 'AmazonEC2', "
+                "'BoxUsage:m5.xlarge', 'RunInstances', 'i-abc123', "
+                "80.0, 24.0, 'Usage')",
+                [dt],
+            )
+            conn.execute(
+                "INSERT INTO cost_line_items "
+                "(usage_start_date, usage_account_id, product_code, "
+                "usage_type, operation, resource_id, unblended_cost, "
+                "usage_amount, line_item_type) "
+                "VALUES (?, '111111111111', 'AmazonEC2', "
+                "'EBS:VolumeUsage.gp3', 'CreateVolume', 'vol-001', "
+                "15.0, 500.0, 'Usage')",
+                [dt],
+            )
+
+        # Period B: Jan 8-14
+        for day in range(8, 15):
+            dt = d(2025, 1, day)
+            # BoxUsage doubled
+            conn.execute(
+                "INSERT INTO cost_line_items "
+                "(usage_start_date, usage_account_id, product_code, "
+                "usage_type, operation, resource_id, unblended_cost, "
+                "usage_amount, line_item_type) "
+                "VALUES (?, '111111111111', 'AmazonEC2', "
+                "'BoxUsage:m5.xlarge', 'RunInstances', 'i-abc123', "
+                "160.0, 48.0, 'Usage')",
+                [dt],
+            )
+            # New SpotUsage
+            conn.execute(
+                "INSERT INTO cost_line_items "
+                "(usage_start_date, usage_account_id, product_code, "
+                "usage_type, operation, resource_id, unblended_cost, "
+                "usage_amount, line_item_type) "
+                "VALUES (?, '111111111111', 'AmazonEC2', "
+                "'SpotUsage:c5.xlarge', 'RunInstances', 'i-spot001', "
+                "40.0, 24.0, 'Usage')",
+                [dt],
+            )
+            # EBS gone — no rows in period B
+
+        # Add data for account 222 (small, for filter test)
+        conn.execute(
+            "INSERT INTO cost_line_items "
+            "(usage_start_date, usage_account_id, product_code, "
+            "usage_type, operation, resource_id, unblended_cost, "
+            "usage_amount, line_item_type) "
+            "VALUES ('2025-01-01', '222222222222', 'AmazonEC2', "
+            "'BoxUsage:t3.micro', 'RunInstances', 'i-dev001', "
+            "5.0, 24.0, 'Usage')"
+        )
+
+        return conn
+
+    @pytest.fixture
+    def attribution_context(self, attribution_db):
+        return ToolContext(db_conn=attribution_db, aws_region="us-east-1")
+
+    def test_basic_attribution(self, attribution_context):
+        result = execute_tool(
+            "attribute_cost_change",
+            {
+                "service": "AmazonEC2",
+                "period_a_start": "2025-01-01",
+                "period_a_end": "2025-01-07",
+                "period_b_start": "2025-01-08",
+                "period_b_end": "2025-01-14",
+            },
+            attribution_context,
+        )
+        assert "error" not in result
+        assert result["service"] == "AmazonEC2"
+        assert result["period_a"]["total_cost"] > 0
+        assert result["period_b"]["total_cost"] > result["period_a"]["total_cost"]
+        assert result["total_change"]["absolute"] > 0
+        assert "summary" in result
+
+    def test_new_and_disappeared(self, attribution_context):
+        result = execute_tool(
+            "attribute_cost_change",
+            {
+                "service": "AmazonEC2",
+                "period_a_start": "2025-01-01",
+                "period_a_end": "2025-01-07",
+                "period_b_start": "2025-01-08",
+                "period_b_end": "2025-01-14",
+            },
+            attribution_context,
+        )
+        assert "error" not in result
+        by_ut = result["by_usage_type"]
+
+        # SpotUsage should be new in period B
+        new_keys = [item["key"] for item in by_ut["new"]]
+        assert any("Spot" in k for k in new_keys)
+
+        # EBS should have disappeared from period A
+        gone_keys = [item["key"] for item in by_ut["disappeared"]]
+        assert any("EBS" in k for k in gone_keys)
+
+        # BoxUsage should be a mover
+        mover_keys = [item["key"] for item in by_ut["movers"]]
+        assert any("Box" in k for k in mover_keys)
+
+    def test_no_cur_data_error(self, attribution_context):
+        result = execute_tool(
+            "attribute_cost_change",
+            {
+                "service": "AmazonRDS",
+                "period_a_start": "2025-01-01",
+                "period_a_end": "2025-01-07",
+                "period_b_start": "2025-01-08",
+                "period_b_end": "2025-01-14",
+            },
+            attribution_context,
+        )
+        assert "error" in result
+        assert "No CUR data" in result["error"]
+
+    def test_account_filter(self, attribution_context):
+        result = execute_tool(
+            "attribute_cost_change",
+            {
+                "service": "AmazonEC2",
+                "period_a_start": "2025-01-01",
+                "period_a_end": "2025-01-07",
+                "period_b_start": "2025-01-08",
+                "period_b_end": "2025-01-14",
+                "account_id": "111111111111",
+            },
+            attribution_context,
+        )
+        assert "error" not in result
+        assert result["period_a"]["total_cost"] > 0
+
+    def test_invalid_dates(self, attribution_context):
+        result = execute_tool(
+            "attribute_cost_change",
+            {
+                "service": "AmazonEC2",
+                "period_a_start": "not-a-date",
+                "period_a_end": "2025-01-07",
+                "period_b_start": "2025-01-08",
+                "period_b_end": "2025-01-14",
+            },
+            attribution_context,
+        )
+        assert "error" in result
+
+    def test_missing_service(self, attribution_context):
+        result = execute_tool(
+            "attribute_cost_change",
+            {
+                "service": "",
+                "period_a_start": "2025-01-01",
+                "period_a_end": "2025-01-07",
+                "period_b_start": "2025-01-08",
+                "period_b_end": "2025-01-14",
+            },
+            attribution_context,
+        )
+        assert "error" in result
+        assert "service is required" in result["error"]
 
 
 class TestUnknownTool:

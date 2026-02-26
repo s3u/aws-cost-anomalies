@@ -507,6 +507,79 @@ DETECT_COST_ANOMALIES_SPEC: dict = {
     }
 }
 
+ATTRIBUTE_COST_CHANGE_SPEC: dict = {
+    "toolSpec": {
+        "name": "attribute_cost_change",
+        "description": (
+            "Compare two periods at the line-item level for a specific "
+            "service. Shows which usage types and resources are new, "
+            "gone, or changed. Requires CUR data in cost_line_items."
+        ),
+        "inputSchema": {
+            "json": {
+                "type": "object",
+                "properties": {
+                    "service": {
+                        "type": "string",
+                        "description": (
+                            "AWS product_code to analyze "
+                            "(e.g. 'AmazonEC2')."
+                        ),
+                    },
+                    "period_a_start": {
+                        "type": "string",
+                        "description": (
+                            "Start date of the baseline period "
+                            "(YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "period_a_end": {
+                        "type": "string",
+                        "description": (
+                            "End date of the baseline period "
+                            "(YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "period_b_start": {
+                        "type": "string",
+                        "description": (
+                            "Start date of the comparison period "
+                            "(YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "period_b_end": {
+                        "type": "string",
+                        "description": (
+                            "End date of the comparison period "
+                            "(YYYY-MM-DD, inclusive)."
+                        ),
+                    },
+                    "account_id": {
+                        "type": "string",
+                        "description": (
+                            "Optional AWS account ID to filter by."
+                        ),
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "description": (
+                            "Number of top items per category. "
+                            "Default 10."
+                        ),
+                    },
+                },
+                "required": [
+                    "service",
+                    "period_a_start",
+                    "period_a_end",
+                    "period_b_start",
+                    "period_b_end",
+                ],
+            }
+        },
+    }
+}
+
 
 # ---------------------------------------------------------------------------
 # Tool registry
@@ -524,6 +597,7 @@ TOOL_DEFINITIONS: list[dict] = [
     COMPARE_PERIODS_SPEC,
     DRILL_DOWN_COST_SPIKE_SPEC,
     SCAN_ANOMALIES_OVER_RANGE_SPEC,
+    ATTRIBUTE_COST_CHANGE_SPEC,
 ]
 
 
@@ -1287,6 +1361,99 @@ def _execute_scan_anomalies_over_range(
     }
 
 
+def _execute_attribute_cost_change(
+    tool_input: dict, context: ToolContext
+) -> dict:
+    """Attribute cost changes between two periods for a service."""
+    from aws_cost_anomalies.analysis.attribution import attribute_cost_change
+
+    service = tool_input.get("service", "")
+    if not service:
+        return {"error": "service is required."}
+
+    try:
+        pa_start = date.fromisoformat(tool_input["period_a_start"])
+        pa_end = date.fromisoformat(tool_input["period_a_end"])
+        pb_start = date.fromisoformat(tool_input["period_b_start"])
+        pb_end = date.fromisoformat(tool_input["period_b_end"])
+    except (KeyError, ValueError) as e:
+        return {"error": f"Invalid or missing date: {e}"}
+
+    account_id = tool_input.get("account_id")
+    top_n = tool_input.get("top_n", 10)
+
+    try:
+        result = attribute_cost_change(
+            context.db_conn,
+            service=service,
+            period_a_start=pa_start,
+            period_a_end=pa_end,
+            period_b_start=pb_start,
+            period_b_end=pb_end,
+            account_id=account_id,
+            top_n=top_n,
+        )
+    except ValueError as e:
+        return {"error": str(e)}
+
+    def _format_items(items: list) -> list[dict]:
+        return [
+            {
+                "key": item.key,
+                "period_a_cost": item.period_a_cost,
+                "period_b_cost": item.period_b_cost,
+                "absolute_change": item.absolute_change,
+                "pct_change": item.pct_change,
+            }
+            for item in items
+        ]
+
+    total_abs = result.period_b_total - result.period_a_total
+    total_pct = (
+        (total_abs / result.period_a_total * 100)
+        if result.period_a_total
+        else None
+    )
+
+    return {
+        "service": result.service,
+        "period_a": {
+            "start": pa_start.isoformat(),
+            "end": pa_end.isoformat(),
+            "total_cost": result.period_a_total,
+        },
+        "period_b": {
+            "start": pb_start.isoformat(),
+            "end": pb_end.isoformat(),
+            "total_cost": result.period_b_total,
+        },
+        "total_change": {
+            "absolute": round(total_abs, 2),
+            "percentage": round(total_pct, 1) if total_pct is not None else None,
+        },
+        "by_usage_type": {
+            "movers": _format_items(result.movers_by_usage_type),
+            "new": _format_items(result.new_by_usage_type),
+            "disappeared": _format_items(result.disappeared_by_usage_type),
+        },
+        "by_resource": {
+            "movers": _format_items(result.movers_by_resource),
+            "new": _format_items(result.new_by_resource),
+            "disappeared": _format_items(result.disappeared_by_resource),
+        },
+        "summary": (
+            f"{result.service} cost changed from "
+            f"${result.period_a_total:,.2f} to ${result.period_b_total:,.2f} "
+            f"({'+' if total_abs >= 0 else ''}"
+            f"${total_abs:,.2f}"
+            f"{f', {total_pct:+.1f}%' if total_pct is not None else ''}). "
+            f"{len(result.movers_by_usage_type)} changed, "
+            f"{len(result.new_by_usage_type)} new, "
+            f"{len(result.disappeared_by_usage_type)} disappeared usage types."
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Executor registry and dispatch
 # ---------------------------------------------------------------------------
@@ -1303,6 +1470,7 @@ _EXECUTORS: dict[str, Callable[[dict, ToolContext], dict]] = {
     "compare_periods": _execute_compare_periods,
     "drill_down_cost_spike": _execute_drill_down_cost_spike,
     "scan_anomalies_over_range": _execute_scan_anomalies_over_range,
+    "attribute_cost_change": _execute_attribute_cost_change,
 }
 
 
