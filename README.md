@@ -6,8 +6,8 @@ Detect cost anomalies across your AWS root and linked accounts. Ingests cost dat
 
 - **Dual Ingestion** — Import cost data from the Cost Explorer API (quick, no S3 setup) or CUR v1/v2 parquet files from S3 (full detail). Both sources coexist in the same database.
 - **Agent-Driven Workflow** — The agent can import data, query it, and call AWS APIs. On first run with an empty database, the agent offers to import Cost Explorer data automatically.
-- **Trend Analysis** — Daily cost trends grouped by service, account, or region with day-over-day changes
-- **Anomaly Detection** — Robust median/MAD z-scores for point anomalies and Theil-Sen slope for gradual drift, with configurable sensitivity and rolling windows
+- **Trend Analysis** — Daily cost trends grouped by service, account, or region with day-over-day changes, plus flexible time-series queries with daily/weekly/monthly granularity
+- **Anomaly Detection** — Robust median/MAD z-scores for point anomalies and Theil-Sen slope for gradual drift, with configurable sensitivity, rolling windows, and comprehensive anomaly explanations (baseline stats, ongoing detection, usage-type attribution)
 - **Natural Language Queries** — Ask questions about your costs in plain English via an agentic system that uses DuckDB, Cost Explorer, CloudWatch, Budgets, and Organizations
 - **MCP Server Support** — Extend the agent with any [Model Context Protocol](https://modelcontextprotocol.io/) server (e.g. CloudTrail for "who launched that instance?")
 
@@ -198,6 +198,9 @@ The agent can:
 - **Query** the local DuckDB database (CUR and/or Cost Explorer data)
 - **Import data** from Cost Explorer or CUR on demand
 - **Call AWS APIs** — Cost Explorer (real-time), CloudWatch, Budgets, Organizations
+- **Detect & explain anomalies** — statistical detection, comprehensive explanations with baseline stats and ongoing checks
+- **Compare periods** — period-over-period comparison and line-item attribution of cost changes
+- **Analyze trends** — time-series with daily/weekly/monthly granularity and summary stats
 - **Auto-bootstrap** — on first run with an empty DB, offers to import Cost Explorer data
 
 On first run with no data, the agent detects the empty database and offers to import Cost Explorer data. No separate `ingest` step is required.
@@ -270,7 +273,7 @@ See [docs/ANOMALIES.md](docs/ANOMALIES.md) for full details.
 # Install dev dependencies
 uv sync --extra dev
 
-# Run unit tests (209 tests, evals excluded by default)
+# Run unit tests (245 tests, evals excluded by default)
 uv run pytest
 
 # Run with verbose output
@@ -285,7 +288,7 @@ uv run ruff check --fix src/ tests/
 
 ### Agent Correctness Evals
 
-The project includes 13 correctness evals that run the agent against a deterministic DuckDB fixture and assert the answers are **numerically correct** — not just keyword matches. These require live AWS Bedrock credentials.
+The project includes 18 correctness evals that run the agent against a deterministic DuckDB fixture and assert the answers are **numerically correct** — not just keyword matches. These require live AWS Bedrock credentials.
 
 ```bash
 # Run evals (requires Bedrock credentials)
@@ -317,7 +320,7 @@ src/aws_cost_anomalies/
 ├── config/        # YAML config loader with validation
 ├── ingestion/     # S3 client, Cost Explorer client, manifest parser, parquet loader
 ├── storage/       # DuckDB connection + schema management
-├── analysis/      # Trend aggregation + anomaly detection
+├── analysis/      # Trend aggregation, anomaly detection, cost attribution, explanations
 ├── agent/         # Bedrock-powered agentic system
 └── utils/         # Date helpers
 ```

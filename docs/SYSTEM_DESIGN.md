@@ -49,12 +49,16 @@ src/aws_cost_anomalies/
 │   ├── database.py       # DuckDB connection factory
 │   └── schema.py         # DDL, indexes, daily summary rebuild
 ├── analysis/
-│   ├── trends.py         # Daily trend aggregation via SQL
-│   └── anomalies.py      # Z-score anomaly detection
+│   ├── trends.py         # Daily trend aggregation + time-series queries
+│   ├── anomalies.py      # Z-score anomaly detection + historical scanning
+│   ├── comparison.py     # Period-over-period cost comparison
+│   ├── drilldown.py      # Cost spike drill-down by usage_type/resource
+│   ├── attribution.py    # Line-item attribution between two periods
+│   └── explainer.py      # Comprehensive anomaly explanation
 ├── agent/
 │   ├── agent.py          # Agentic loop: Bedrock Converse → tool dispatch
 │   ├── bedrock_client.py # Boto3 bedrock-runtime wrapper
-│   ├── tools.py          # Tool definitions + executors (DuckDB, CE, CW, Budgets, Orgs)
+│   ├── tools.py          # 14 tool definitions + executors
 │   ├── executor.py       # SQL validation + safe execution
 │   ├── prompts.py        # Agent system prompt + schema description
 │   └── mcp_bridge.py     # MCP server integration
@@ -336,6 +340,59 @@ Results are returned sorted by `|z_score|` descending.
 
 Simple aggregation of total daily cost across all dimensions. Used by the `trends` command to show the overall daily spend line.
 
+### `get_cost_trend(conn, date_start, date_end, group_by, filter_value, granularity)`
+
+Flexible time-series query used by the agent's `get_cost_trend` tool:
+1. Validates `group_by` against a whitelist (`product_code`, `usage_account_id`, `region`)
+2. Validates `granularity` (`daily`, `weekly`, `monthly`) and uses `DATE_TRUNC` for aggregation
+3. Supports optional `filter_value` (requires `group_by`)
+4. Returns `CostTrendResult` with data points and summary stats (total, average, min, max)
+
+---
+
+## Period Comparison
+
+**File:** `analysis/comparison.py`
+
+### `compare_periods(conn, period_a_start/end, period_b_start/end, group_by, top_n)`
+
+Compares costs between two date ranges using a `FULL OUTER JOIN` on `daily_cost_summary`. Categorizes results into movers (present in both periods), new (only in period B), and disappeared (only in period A).
+
+---
+
+## Cost Spike Drill-Down
+
+**File:** `analysis/drilldown.py`
+
+### `drill_down_cost_spike(conn, service, date_start, date_end, account_id, top_n)`
+
+Breaks down CUR line items for a service by usage_type, operation, and resource_id. Requires CUR data in `cost_line_items`. Returns percentage-of-total breakdowns for each dimension.
+
+---
+
+## Cost Attribution
+
+**File:** `analysis/attribution.py`
+
+### `attribute_cost_change(conn, service, period_a_start/end, period_b_start/end, account_id, top_n)`
+
+Compares two periods at the CUR line-item level for a specific service. Uses `FULL OUTER JOIN` queries on `cost_line_items` for both `usage_type` and `resource_id` dimensions. Categorizes items as movers, new, or disappeared. Validates dimensions against a whitelist for SQL safety.
+
+---
+
+## Anomaly Explanation
+
+**File:** `analysis/explainer.py`
+
+### `explain_anomaly(conn, service, anomaly_date, account_id, baseline_days)`
+
+Builds a comprehensive anomaly narrative:
+1. **Baseline stats**: queries N days before the anomaly date, computes median/min/max
+2. **Magnitude**: anomaly cost vs baseline median, cost multiple
+3. **Ongoing check**: examines up to 7 days after; elevated if cost > 1.5× median
+4. **Usage-type attribution**: optional CUR query comparing baseline avg vs anomaly day per usage_type. Gracefully degrades if no CUR data (`has_cur_data=False`)
+5. **Baseline flag**: `has_baseline=False` when no prior data exists, signaling unreliable comparisons
+
 ---
 
 ## Natural Language Query — Agentic System
@@ -374,6 +431,12 @@ run_agent(question, db_conn, model, region, on_step) → AgentResponse
 | `detect_cost_anomalies` | DuckDB | Anomaly detection (median/MAD z-scores, Theil-Sen drift) |
 | `ingest_cost_explorer_data` | `ce` | Import Cost Explorer data into local DB |
 | `ingest_cur_data` | `s3` | Import CUR data from S3 into local DB |
+| `compare_periods` | DuckDB | Period-over-period cost comparison by dimension |
+| `drill_down_cost_spike` | DuckDB | Break down a service spike by usage_type/operation/resource (CUR) |
+| `scan_anomalies_over_range` | DuckDB | Scan a historical date range for anomalies day-by-day |
+| `attribute_cost_change` | DuckDB | Compare two periods at line-item level for a service (CUR) |
+| `get_cost_trend` | DuckDB | Time-series with grouping, filtering, daily/weekly/monthly granularity |
+| `explain_anomaly` | DuckDB | Comprehensive anomaly narrative: baseline, magnitude, ongoing, attribution |
 
 Tool errors are returned as results (not raised), so the agent can adapt and try alternative approaches.
 

@@ -22,11 +22,11 @@ pytest
   - `config/` — YAML config loading
   - `ingestion/` — Cost Explorer client, S3 CUR download + parquet loading
   - `storage/` — DuckDB connection + schema
-  - `analysis/` — trend aggregation + z-score anomaly detection
+  - `analysis/` — trend aggregation, anomaly detection, period comparison, cost attribution, anomaly explanation
   - `agent/` — Bedrock-powered agentic system
     - `agent.py` — Agent loop: Bedrock Converse → tool dispatch → loop
     - `bedrock_client.py` — Boto3 bedrock-runtime wrapper
-    - `tools.py` — Tool definitions (DuckDB, Cost Explorer, CloudWatch, Budgets, Organizations, anomaly detection, ingestion)
+    - `tools.py` — 14 tool definitions (DuckDB, Cost Explorer, CloudWatch, Budgets, Organizations, anomaly detection, ingestion, period comparison, drill-down, scan, attribution, trends, anomaly explanation)
     - `executor.py` — SQL validation + safe execution
     - `prompts.py` — Agent system prompt + schema description
   - `utils/` — date helpers
